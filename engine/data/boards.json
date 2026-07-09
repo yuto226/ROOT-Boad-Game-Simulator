@@ -1,0 +1,8 @@
+{"_verified": false,
+ "marquise": {"building_costs": [0, 1, 2, 3, 3, 4],
+              "building_vp": {"sawmill": [0,1,2,3,4,5], "workshop": [0,2,2,3,4,5], "recruiter": [0,1,2,3,3,4]},
+              "card_icon_slots": {"recruiter": [2, 4]}},
+ "eyrie": {"roost_vp": [0, 0, 1, 2, 3, 4, 5], "roost_card_icon_slots": [3, 5]},
+ "alliance": {"sympathy_costs": [1,1,1,2,2,2,3,3,3,3],
+              "sympathy_vp": [0,1,1,1,2,2,3,4,4,4],
+              "base_card_icons_per_base": 1}}

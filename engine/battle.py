@@ -1,0 +1,244 @@
+"""戦闘サブシステム(4.3 の4ステップ)。
+
+保留デシジョンスタック(3.2)で表現する。ステップ:
+1. 防御側の奇襲(4.3.1) → AmbushDefenderDecision
+2. 攻撃側の妨害(4.3.1.I) → AmbushAttackerDecision
+3. ダイス(4.3.2, rng) → 無防備+1(4.3.3.II)
+4. ヒットの割り振り(4.3.4) → AllocateHitsDecision(受け手ごと)
+
+除去の行き先(3.5): 兵士=サプライ, 建物=派閥ボードトラック, 木材=サプライ,
+城砦=ゲーム除外。建物/トークン除去で除去側に1VP(3.2.1)。
+"""
+from __future__ import annotations
+
+import dataclasses
+from typing import List, Optional, Tuple
+
+from .actions import (
+    AllocateHit,
+    AllocateHitsDecision,
+    AmbushAttackerDecision,
+    AmbushDefenderDecision,
+    BattleCtx,
+    DeclareBattle,
+)
+from .state import GameState
+from .types import (
+    FactionId,
+    MARQUISE_BUILDINGS,
+    Piece,
+    Suit,
+    T_KEEP,
+    T_WOOD,
+)
+
+
+# ---------------- 除去(3.5) ----------------
+def _award_vp(state: GameState, faction: FactionId, vp: int) -> GameState:
+    fs = state.fs(faction)
+    return state.with_faction_state(dataclasses.replace(fs, vp=fs.vp + vp))
+
+
+def _return_building_to_board(state: GameState, victim: FactionId, kind: str) -> GameState:
+    """建物タイルを派閥ボードの最右空き枠へ(3.5)。猫は built_count を減らす。"""
+    if victim == FactionId.MARQUISE and kind in MARQUISE_BUILDINGS:
+        ms = state.marquise()
+        field = {"sawmill": "built_sawmill", "workshop": "built_workshop",
+                 "recruiter": "built_recruiter"}[kind]
+        cur = getattr(ms, field)
+        return state.with_faction_state(dataclasses.replace(ms, **{field: max(0, cur - 1)}))
+    return state
+
+
+def _return_token_to_supply(state: GameState, victim: FactionId, kind: str) -> GameState:
+    """トークンを行き先へ(3.5)。木材=サプライ, 城砦=ゲーム除外。"""
+    if kind == T_WOOD and victim == FactionId.MARQUISE:
+        ms = state.marquise()
+        return state.with_faction_state(dataclasses.replace(ms, wood_supply=ms.wood_supply + 1))
+    # 城砦(keep)は再配置不可のためゲームから除外(6.2.2) → 何もしない
+    return state
+
+
+def remove_piece(state: GameState, clearing: int, victim: FactionId,
+                 target: Tuple, source: Optional[FactionId]) -> GameState:
+    """戦場から victim の配置物1つを除去(4.3.4)。source に建物/トークンVP付与。"""
+    cs = state.clearing(clearing)
+    kind = target[0]
+    if kind == "soldier":
+        cs = cs.add_soldiers(victim, -1)
+        state = state.with_clearing(cs)
+        fs = state.fs(victim)
+        state = state.with_faction_state(
+            dataclasses.replace(fs, soldiers_supply=fs.soldiers_supply + 1))
+        return state
+    if kind == "building":
+        piece = Piece(victim, target[1])
+        cs = cs.remove_building(piece)
+        state = state.with_clearing(cs)
+        state = _return_building_to_board(state, victim, target[1])
+        if source is not None:
+            state = _award_vp(state, source, 1)  # 3.2.1
+        return state
+    if kind == "token":
+        cs = cs.remove_one_token(victim, target[1])
+        state = state.with_clearing(cs)
+        state = _return_token_to_supply(state, victim, target[1])
+        if source is not None:
+            state = _award_vp(state, source, 1)  # 3.2.1
+        return state
+    raise ValueError("unknown removal target %r" % (target,))
+
+
+def _has_pieces(state: GameState, clearing: int, faction: FactionId) -> bool:
+    cs = state.clearing(clearing)
+    if cs.soldier_count(faction) > 0:
+        return True
+    return any(p.faction == faction for p in cs.buildings + cs.tokens)
+
+
+def _auto_target(state: GameState, clearing: int, victim: FactionId) -> Optional[Tuple]:
+    """自動除去用の対象選択(兵士優先, 4.3.4)。"""
+    cs = state.clearing(clearing)
+    if cs.soldier_count(victim) > 0:
+        return ("soldier",)
+    bs = cs.buildings_of(victim)
+    if bs:
+        return ("building", bs[0].kind)
+    ts = cs.tokens_of(victim)
+    if ts:
+        return ("token", ts[0].kind)
+    return None
+
+
+def _auto_remove(state: GameState, clearing: int, victim: FactionId,
+                 source: Optional[FactionId], hits: int) -> GameState:
+    for _ in range(hits):
+        t = _auto_target(state, clearing, victim)
+        if t is None:
+            break
+        state = remove_piece(state, clearing, victim, t, source)
+    return state
+
+
+# ---------------- ダイスとヒット割り振り ----------------
+def _push_allocations(state: GameState, ctx: BattleCtx,
+                      atk_hits: int, def_hits: int) -> GameState:
+    """両者のヒット割り振りデシジョンを積む(4.3.4)。"""
+    decisions = []
+    if atk_hits > 0 and _has_pieces(state, ctx.clearing, ctx.defender):
+        decisions.append(AllocateHitsDecision(
+            actor=ctx.defender, victim=ctx.defender, hits=atk_hits,
+            source=ctx.attacker, clearing=ctx.clearing))
+    if def_hits > 0 and _has_pieces(state, ctx.clearing, ctx.attacker):
+        decisions.append(AllocateHitsDecision(
+            actor=ctx.attacker, victim=ctx.attacker, hits=def_hits,
+            source=ctx.defender, clearing=ctx.clearing))
+    if not decisions:
+        return state
+    return state.push_pending(*decisions)
+
+
+def _roll_and_allocate(state: GameState, ctx: BattleCtx, rng) -> GameState:
+    """第2ステップ(4.3.2)〜第4ステップ準備。"""
+    cs = state.clearing(ctx.clearing)
+    d1 = rng.randint(1, 6)
+    d2 = rng.randint(1, 6)
+    hi, lo = max(d1, d2), min(d1, d2)
+    atk_sol = cs.soldier_count(ctx.attacker)
+    def_sol = cs.soldier_count(ctx.defender)
+    # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)
+    atk_hits = min(hi, atk_sol) + (1 if def_sol == 0 else 0)
+    def_hits = min(lo, def_sol)
+    return _push_allocations(state, ctx, atk_hits, def_hits)
+
+
+# ---------------- エントリポイント(apply から呼ぶ) ----------------
+def _matching_ambush(state: GameState, faction: FactionId, clearing: int) -> Optional[str]:
+    """戦場と一致する奇襲カードを手札から探す(4.3.1)。鳥はワイルド(2.1.1)。"""
+    suit = state.map.clearing(clearing).suit
+    for cid in state.fs(faction).hand:
+        cdef = state.cards.get(cid)
+        if cdef.is_ambush and (cdef.suit == suit or cdef.suit == Suit.BIRD):
+            return cid
+    return None
+
+
+def declare_battle(state: GameState, action: DeclareBattle, rng) -> GameState:
+    """戦闘宣言(4.3)。防御側に奇襲機会があれば積み、なければ即ロール。"""
+    ctx = BattleCtx(attacker=action.player, defender=action.defender,
+                    clearing=action.clearing)
+    if _matching_ambush(state, ctx.defender, ctx.clearing) is not None:
+        return state.push_pending(AmbushDefenderDecision(actor=ctx.defender, ctx=ctx))
+    return _roll_and_allocate(state, ctx, rng)
+
+
+def resolve_ambush_defender(state: GameState, card_id: Optional[str], rng) -> GameState:
+    """防御側の奇襲選択(4.3.1)。"""
+    from .mechanics import discard_card
+    dec = state.pending[-1]
+    ctx = dec.ctx
+    state = state.pop_pending()
+    if card_id is None:  # 奇襲しない
+        return _roll_and_allocate(state, ctx, rng)
+    state = discard_card(state, ctx.defender, card_id)
+    ctx = dataclasses.replace(ctx, ambush_used=True)
+    # 攻撃側に妨害機会(4.3.1.I)があれば積む。なければ即2ヒット。
+    if _matching_ambush(state, ctx.attacker, ctx.clearing) is not None:
+        return state.push_pending(AmbushAttackerDecision(actor=ctx.attacker, ctx=ctx))
+    return _apply_ambush_hits(state, ctx, rng)
+
+
+def resolve_ambush_attacker(state: GameState, card_id: Optional[str], rng) -> GameState:
+    """攻撃側の奇襲妨害選択(4.3.1.I)。"""
+    from .mechanics import discard_card
+    dec = state.pending[-1]
+    ctx = dec.ctx
+    state = state.pop_pending()
+    if card_id is not None:  # 妨害成立 → 奇襲は打ち消され通常ロールへ
+        state = discard_card(state, ctx.attacker, card_id)
+        return _roll_and_allocate(state, ctx, rng)
+    return _apply_ambush_hits(state, ctx, rng)
+
+
+def _apply_ambush_hits(state: GameState, ctx: BattleCtx, rng) -> GameState:
+    """奇襲2ヒットを攻撃側へ即時適用(4.3.1.II)。コマ全滅なら戦闘終了。
+
+    終了判定は「攻撃側のコマ(=兵士等の立体物, G.1.17)がすべて除去」
+    であり、建物タイル・トークンは含めない(建物が残っていても終了)。
+    TODO(放浪部族): 放浪者コマもコマとして数える(9.2.2)。
+    ※簡略化: 2ヒットの除去対象は兵士優先の自動選択(本来は 4.3.4 と
+    同様に受け手が選択する。兵士のみなら結果は同一)。
+    """
+    state = _auto_remove(state, ctx.clearing, ctx.attacker, ctx.defender, 2)
+    if state.clearing(ctx.clearing).soldier_count(ctx.attacker) == 0:
+        return state  # 攻撃側のコマ全滅 → 戦闘終了(4.3.1.II)
+    return _roll_and_allocate(state, ctx, rng)
+
+
+def allocate_hit(state: GameState, action: AllocateHit, rng) -> GameState:
+    """ヒット1つを適用(4.3.4)。"""
+    dec = state.pending[-1]
+    state = remove_piece(state, dec.clearing, dec.victim, action.target, dec.source)
+    state = state.pop_pending()
+    remaining = dec.hits - 1
+    if remaining > 0 and _has_pieces(state, dec.clearing, dec.victim):
+        state = state.push_pending(dataclasses.replace(dec, hits=remaining))
+    return state
+
+
+def allocate_options(state: GameState, dec: AllocateHitsDecision) -> List[AllocateHit]:
+    """割り振りデシジョンの選択肢(4.3.4: 兵士が残る間は建物/トークン不可)。"""
+    cs = state.clearing(dec.clearing)
+    if cs.soldier_count(dec.victim) > 0:
+        return [AllocateHit(player=dec.actor, target=("soldier",))]
+    out: List[AllocateHit] = []
+    seen = set()
+    for p in cs.buildings_of(dec.victim):
+        if ("building", p.kind) not in seen:
+            seen.add(("building", p.kind))
+            out.append(AllocateHit(player=dec.actor, target=("building", p.kind)))
+    for p in cs.tokens_of(dec.victim):
+        if ("token", p.kind) not in seen:
+            seen.add(("token", p.kind))
+            out.append(AllocateHit(player=dec.actor, target=("token", p.kind)))
+    return out
