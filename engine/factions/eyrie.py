@@ -453,6 +453,9 @@ def apply_decree_move(state: GameState, action: EyrieDecreeMove, rng) -> GameSta
     state = state.with_clearing(src.add_soldiers(EYRIE, -action.count))
     state = state.with_clearing(
         state.clearing(action.dst).add_soldiers(EYRIE, action.count))
+    # 支持広場への兵士移動 → 蜂起(8.2.6)。連合不参加/非支持広場なら no-op
+    from . import alliance as alliance_mod
+    state = alliance_mod.outrage_on_move(state, EYRIE, action.dst, rng)
     return state
 
 

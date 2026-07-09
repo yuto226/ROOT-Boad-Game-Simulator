@@ -24,12 +24,14 @@ from .actions import (
 )
 from .state import GameState
 from .types import (
+    B_BASE,
     B_ROOST,
     FactionId,
     MARQUISE_BUILDINGS,
     Piece,
     Suit,
     T_KEEP,
+    T_SYMPATHY,
     T_WOOD,
 )
 
@@ -108,6 +110,10 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
             state = _maybe_despot_vp(state, source)  # 7.8.4
+        # 森林連合の拠点タイル除去の連鎖処理(8.2.4)
+        if victim == FactionId.ALLIANCE and target[1] == B_BASE:
+            from .factions import alliance as alliance_mod
+            state = alliance_mod.on_base_removed(state, clearing)
         return state
     if kind == "token":
         cs = cs.remove_one_token(victim, target[1])
@@ -116,6 +122,10 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
             state = _maybe_despot_vp(state, source)  # 7.8.4
+        # 支持トークン除去 → 支持数の減算 + 蜂起(8.2.6)
+        if victim == FactionId.ALLIANCE and target[1] == T_SYMPATHY:
+            from .factions import alliance as alliance_mod
+            state = alliance_mod.on_sympathy_removed(state, source, clearing)
         return state
     raise ValueError("unknown removal target %r" % (target,))
 
@@ -177,9 +187,15 @@ def _roll_and_allocate(state: GameState, ctx: BattleCtx, rng) -> GameState:
     hi, lo = max(d1, d2), min(d1, d2)
     atk_sol = cs.soldier_count(ctx.attacker)
     def_sol = cs.soldier_count(ctx.defender)
+    # 通常(4.3.2): 攻撃側=大きい方、防御側=小さい方。
+    # ゲリラ戦(8.2.2): 防御側が森林連合なら攻守のダイス割当を反転する。
+    if ctx.defender == FactionId.ALLIANCE:
+        atk_roll, def_roll = lo, hi
+    else:
+        atk_roll, def_roll = hi, lo
     # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)
-    atk_hits = min(hi, atk_sol) + (1 if def_sol == 0 else 0)
-    def_hits = min(lo, def_sol)
+    atk_hits = min(atk_roll, atk_sol) + (1 if def_sol == 0 else 0)
+    def_hits = min(def_roll, def_sol)
     # 司令官(7.8.3): 鷲巣が攻撃側なら追加1ヒット(4.3.3.I, 出目上限の対象外)
     if ctx.attacker == FactionId.EYRIE and _eyrie_leader(state) == "commander":
         atk_hits += 1
@@ -257,10 +273,16 @@ def _apply_ambush_hits(state: GameState, ctx: BattleCtx, rng) -> GameState:
 
 
 def allocate_hit(state: GameState, action: AllocateHit, rng) -> GameState:
-    """ヒット1つを適用(4.3.4)。"""
+    """ヒット1つを適用(4.3.4)。
+
+    このデシジョンを先に pop してから除去する。除去(remove_piece)は
+    森林連合の蜂起(8.2.6)や拠点喪失時の支援者調整(8.2.4)で新たな
+    デシジョンを pending に積むことがあるため、pop を除去より後に行うと
+    スタック先頭を取り違える。継続の割り振りは除去後に積み直す。
+    """
     dec = state.pending[-1]
-    state = remove_piece(state, dec.clearing, dec.victim, action.target, dec.source)
     state = state.pop_pending()
+    state = remove_piece(state, dec.clearing, dec.victim, action.target, dec.source)
     remaining = dec.hits - 1
     if remaining > 0 and _has_pieces(state, dec.clearing, dec.victim):
         state = state.push_pending(dataclasses.replace(dec, hits=remaining))

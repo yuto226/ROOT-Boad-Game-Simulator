@@ -47,7 +47,36 @@ def craft_tool_suits(state: GameState, faction: FactionId) -> List[str]:
         return suits
     if faction == FactionId.EYRIE:
         return [suit for _, suit in eyrie_available_tools(state)]
+    if faction == FactionId.ALLIANCE:
+        return [suit for _, suit in alliance_available_tools(state)]
     return []
+
+
+def assign_tools(tools: List[Tuple[int, str]], cost) -> Optional[List[int]]:
+    """クラフトツール(広場ID, 動物種)の一覧でコスト(4.1.1)を支払う割当。
+
+    支払えなければ None。具体的な動物種を先に、ワイルド("any"/"?")を
+    後に割り当てる決定的アルゴリズム(legal と apply で同一の結果)。
+    鷲巣の止まり木・森林連合の支持トークン双方から共用する。
+    """
+    tools = list(tools)
+    used: List[int] = []
+    specific = [sym for sym in cost if sym not in ("any", "?")]
+    wilds = len(cost) - len(specific)
+    for sym in specific:
+        found = None
+        for i, (cid, suit) in enumerate(tools):
+            if suit == sym:
+                found = i
+                break
+        if found is None:
+            return None  # 鳥コスト等、一致ツールなし(広場に鳥はない, 2.2.2)
+        used.append(tools.pop(found)[0])
+    for _ in range(wilds):
+        if not tools:
+            return None
+        used.append(tools.pop(0)[0])
+    return used
 
 
 def eyrie_available_tools(state: GameState) -> List[Tuple[int, str]]:
@@ -69,29 +98,31 @@ def eyrie_available_tools(state: GameState) -> List[Tuple[int, str]]:
 
 
 def eyrie_payment(state: GameState, cost) -> Optional[List[int]]:
-    """コスト(4.1.1)を未起動の止まり木で支払う割当(広場IDの列)。
+    """コスト(4.1.1)を未起動の止まり木で支払う割当(広場IDの列)。"""
+    return assign_tools(eyrie_available_tools(state), cost)
 
-    支払えなければ None。具体的な動物種を先に、ワイルド("any"/"?")を
-    後に割り当てる決定的アルゴリズム(legal と apply で同一の結果)。
+
+def alliance_available_tools(state: GameState) -> List[Tuple[int, str]]:
+    """未起動の支持トークン(広場ID, 動物種)の一覧(8.2.1)。
+
+    森林連合のクラフトツールはマップ上の支持トークンで、動物種はその
+    広場のもの。各トークンは1ターン中1回しか起動できない(4.1.1)。
+    起動済みは AllianceState.used_sympathy_clearings(広場ID単位)で追跡。
     """
-    tools = eyrie_available_tools(state)
-    used: List[int] = []
-    specific = [sym for sym in cost if sym not in ("any", "?")]
-    wilds = len(cost) - len(specific)
-    for sym in specific:
-        found = None
-        for i, (cid, suit) in enumerate(tools):
-            if suit == sym:
-                found = i
-                break
-        if found is None:
-            return None  # 鳥コスト等、一致ツールなし(広場に鳥はない, 2.2.2)
-        used.append(tools.pop(found)[0])
-    for _ in range(wilds):
-        if not tools:
-            return None
-        used.append(tools.pop(0)[0])
-    return used
+    from .types import T_SYMPATHY
+    als = state.alliance()
+    out: List[Tuple[int, str]] = []
+    for cs in state.clearings:
+        if cs.cid in als.used_sympathy_clearings:
+            continue
+        if cs.has_token(FactionId.ALLIANCE, T_SYMPATHY):
+            out.append((cs.cid, state.map.clearing(cs.cid).suit.value))
+    return out
+
+
+def alliance_payment(state: GameState, cost) -> Optional[List[int]]:
+    """コスト(4.1.1)を未起動の支持トークンで支払う割当(広場IDの列)。"""
+    return assign_tools(alliance_available_tools(state), cost)
 
 
 def legal_crafts(state: GameState, faction: FactionId) -> List[CraftCard]:
@@ -115,6 +146,10 @@ def legal_crafts(state: GameState, faction: FactionId) -> List[CraftCard]:
         if faction == FactionId.EYRIE:
             # 鷲巣: 止まり木ごとに1ターン1回の厳密な割当(7.2.1, 4.1.1)
             if eyrie_payment(state, cdef.cost) is None:
+                continue
+        elif faction == FactionId.ALLIANCE:
+            # 連合: 支持トークンごとに1ターン1回の厳密な割当(8.2.1, 4.1.1)
+            if alliance_payment(state, cdef.cost) is None:
                 continue
         elif not _can_pay(cdef.cost, suits):
             continue
@@ -150,6 +185,14 @@ def apply_craft(state: GameState, action: CraftCard, rng) -> GameState:
         # 無効=カード記載値(7.8.1)
         if state.eyrie().leader != "builder":
             vp = 1
+    elif faction == FactionId.ALLIANCE:
+        # ツール起動の記録(支持トークンの広場ID単位で1ターン1回, 8.2.1)。
+        # VPはカード記載値どおり(4.1.2。連合には商業軽視のような減額はない)
+        pay = alliance_payment(state, cdef.cost)
+        assert pay is not None, "alliance craft without payable sympathy tokens"
+        als = state.alliance()
+        state = state.with_faction_state(dataclasses.replace(
+            als, used_sympathy_clearings=als.used_sympathy_clearings + tuple(pay)))
     state = state.take_item(item)
     fs = state.fs(faction)
     new_fs = dataclasses.replace(fs, items=fs.items + (item,), vp=fs.vp + vp)

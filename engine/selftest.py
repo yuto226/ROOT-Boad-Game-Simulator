@@ -15,6 +15,8 @@ import random
 import sys
 
 from .actions import (
+    AllianceDiscardSupporter,
+    AllianceRevolt,
     AllocateHit,
     AllocateHitsDecision,
     AmbushChoice,
@@ -24,13 +26,19 @@ from .actions import (
     EyrieChooseCorner,
     EyrieChooseLeader,
     EyrieTurmoil,
+    MarquiseMarch,
+    OutrageDecision,
+    OutragePay,
     SetupChooseKeep,
+    SupportersLimitDecision,
 )
 from .apply import apply
+from .battle import remove_piece
 from .game import new_game
 from .legal import legal_actions
 from .state import GameState
 from .types import (
+    B_BASE,
     B_ROOST,
     B_SAWMILL,
     Corner,
@@ -39,11 +47,13 @@ from .types import (
     Phase,
     Piece,
     Suit,
+    T_SYMPATHY,
 )
 
 M = FactionId.MARQUISE
 D = FactionId.DUMMY
 E = FactionId.EYRIE
+A = FactionId.ALLIANCE
 
 
 def _setup_two_faction(rng: random.Random) -> GameState:
@@ -246,6 +256,208 @@ def test_eyrie_turmoil_new_generation() -> None:
     print("  new generation: %d leaders selectable" % len(acts))
 
 
+# ---------------- 森林連合(第8章) ----------------
+class ScriptedRng:
+    """randint を固定列で返すテスト用スタブ(ゲリラ戦のダイス固定)。"""
+
+    def __init__(self, rolls):
+        self.rolls = list(rolls)
+
+    def randint(self, a, b):
+        return self.rolls.pop(0)
+
+    def shuffle(self, seq):
+        pass
+
+    def choice(self, seq):
+        return seq[0]
+
+
+def _clear(state: GameState, cid: int) -> GameState:
+    cs = dataclasses.replace(state.clearing(cid), soldiers=(), buildings=(), tokens=())
+    return state.with_clearing(cs)
+
+
+def _clearings_of_suit(state: GameState, suit: Suit):
+    return [cs.cid for cs in state.clearings if state.map.clearing(cs.cid).suit == suit]
+
+
+def _cards_of_suit(state: GameState, suit: Suit, n: int):
+    out = []
+    for d in state.cards.defs:
+        if d.is_dominance:
+            continue
+        if d.suit == suit:
+            out.append(d.id)
+        if len(out) >= n:
+            break
+    assert len(out) >= n, "need %d cards of suit %s" % (n, suit)
+    return out
+
+
+def _setup_marquise_alliance(rng: random.Random) -> GameState:
+    """猫(城砦NW)+連合の2派閥。セットアップ(支援者3枚含む)を解決した状態。"""
+    state = new_game((M, A), rng)
+    state = apply(state, SetupChooseKeep(player=M, corner="NW"), rng)
+    assert not state.pending
+    assert len(state.alliance().supporters) == 3, "8.3.4: 支援者3枚"
+    return state
+
+
+def _set_alliance(state: GameState, **kw) -> GameState:
+    return state.with_faction_state(dataclasses.replace(state.alliance(), **kw))
+
+
+def test_outrage_pay_from_hand() -> None:
+    """蜂起(8.2.6): 猫が支持広場へ行軍 → 一致カードで支払い、支援者+1。"""
+    rng = random.Random(1)
+    state = _setup_marquise_alliance(rng)
+    # 隣接する2広場を選び、dst に支持トークンを置く
+    src = 0
+    dst = state.map.clearing(src).adjacent[0]
+    state = _clear(state, src)
+    state = _clear(state, dst)
+    dst_suit = state.map.clearing(dst).suit
+    state = state.with_clearing(state.clearing(dst).add_token(Piece(A, T_SYMPATHY)))
+    state = _set_alliance(state, placed_sympathy=1, supporters=())
+    # 猫: src に兵士2、手札に dst 一致カード1枚
+    state = state.with_clearing(state.clearing(src).add_soldiers(M, 2))
+    match_card = _cards_of_suit(state, dst_suit, 1)[0]
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=(match_card,)))
+
+    state = apply(state, MarquiseMarch(player=M, src=src, dst=dst, count=1), rng)
+    assert state.pending and isinstance(state.pending[-1], OutrageDecision)
+    assert state.pending[-1].actor == M and state.pending[-1].clearing == dst
+
+    acts = legal_actions(state)
+    pay = [a for a in acts if isinstance(a, OutragePay) and a.card_id == match_card]
+    assert pay, "matching outrage payment expected: %r" % acts
+    state = apply(state, pay[0], rng)
+    assert not state.pending
+    assert match_card not in state.fs(M).hand, "paid card leaves hand"
+    assert state.alliance().supporters == (match_card,), "supporter box gains the card"
+    print("  outrage(pay): supporters=%r" % (state.alliance().supporters,))
+
+
+def test_outrage_auto_draw() -> None:
+    """蜂起(8.2.6): 一致カードなし → 山札トップ1枚が自動で支援者ボックスへ。"""
+    rng = random.Random(2)
+    state = _setup_marquise_alliance(rng)
+    src = 0
+    dst = state.map.clearing(src).adjacent[0]
+    state = _clear(state, src)
+    state = _clear(state, dst)
+    dst_suit = state.map.clearing(dst).suit
+    state = state.with_clearing(state.clearing(dst).add_token(Piece(A, T_SYMPATHY)))
+    state = _set_alliance(state, placed_sympathy=1, supporters=())
+    state = state.with_clearing(state.clearing(src).add_soldiers(M, 2))
+    # dst と一致しない、かつ鳥でない手札を1枚だけ持たせる
+    other = next(s for s in (Suit.FOX, Suit.RABBIT, Suit.MOUSE) if s != dst_suit)
+    state = state.with_faction_state(dataclasses.replace(
+        state.fs(M), hand=(_cards_of_suit(state, other, 1)[0],)))
+    deck_top = state.deck[-1]
+    hand_before = state.fs(M).hand
+
+    state = apply(state, MarquiseMarch(player=M, src=src, dst=dst, count=1), rng)
+    # 一致カードがないので単一の自動補充 → ゲームループ相当で自動適用
+    acts = legal_actions(state)
+    assert acts == [OutragePay(player=M, card_id=None)], "auto-draw only: %r" % acts
+    state = apply(state, acts[0], rng)
+    assert not state.pending
+    assert state.fs(M).hand == hand_before, "payer hand unchanged on auto-draw"
+    assert state.alliance().supporters == (deck_top,), "deck top enters supporter box"
+    print("  outrage(auto): supporters=%r" % (state.alliance().supporters,))
+
+
+def test_revolt() -> None:
+    """反乱(8.4.1): 敵除去+VP・拠点・兵士(一致支持広場数)・指揮官・支援者2枚消費。"""
+    rng = random.Random(4)
+    state = _setup_marquise_alliance(rng)
+    fox_cids = _clearings_of_suit(state, Suit.FOX)
+    c = next(cid for cid in fox_cids
+             if state.map.clearing(cid).slots >= 1 and not state.clearing(cid).ruin)
+    d = next(cid for cid in fox_cids if cid != c)
+    state = _clear(state, c)
+    state = _clear(state, d)
+    # 支持広場 c(fox)+d(fox)。c に敵(猫)兵士2+建物1
+    state = state.with_clearing(state.clearing(c).add_token(Piece(A, T_SYMPATHY))
+                                .add_soldiers(M, 2).add_building(Piece(M, B_SAWMILL)))
+    state = state.with_clearing(state.clearing(d).add_token(Piece(A, T_SYMPATHY)))
+    supp = tuple(_cards_of_suit(state, Suit.FOX, 2))
+    state = _set_alliance(state, placed_sympathy=2, supporters=supp,
+                          bases_placed=(), officers=0, soldiers_supply=10)
+    vp0 = state.alliance().vp
+
+    state = apply(state, AllianceRevolt(player=A, clearing=c), rng)
+    cs = state.clearing(c)
+    als = state.alliance()
+    assert cs.soldier_count(M) == 0 and not cs.buildings_of(M), "enemies removed"
+    assert als.vp == vp0 + 1, "1VP for the removed building (soldiers give 0): %d" % als.vp
+    assert any(p.faction == A and p.kind == B_BASE for p in cs.buildings), "base placed"
+    assert als.bases_placed == ("fox",)
+    assert cs.soldier_count(A) == 2, "soldiers = matching sympathetic clearings (c,d)"
+    assert als.officers == 1, "one officer added"
+    assert len(als.supporters) == 0, "2 supporters spent"
+    assert als.soldiers_supply == 10 - 2 - 1, "supply spent on 2 soldiers + 1 officer"
+    print("  revolt: vp=%d base=%r soldiers@c=%d officers=%d"
+          % (als.vp, als.bases_placed, cs.soldier_count(A), als.officers))
+
+
+def test_base_removed() -> None:
+    """拠点除去(8.2.4): 一致支援者(鳥含む)全捨て・指揮官半減・全喪失で5枚調整。"""
+    rng = random.Random(5)
+    state = _setup_marquise_alliance(rng)
+    c = _clearings_of_suit(state, Suit.FOX)[0]
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_building(Piece(A, B_BASE)))
+    fox = _cards_of_suit(state, Suit.FOX, 1)[0]
+    bird = _cards_of_suit(state, Suit.BIRD, 1)[0]
+    mouse = _cards_of_suit(state, Suit.MOUSE, 1)[0]
+    supporters = (fox, bird) + (mouse,) * 6  # 一致=fox,bird / 非一致=mouse×6
+    state = _set_alliance(state, bases_placed=("fox",), officers=3,
+                          supporters=supporters, soldiers_supply=0)
+
+    # 猫が拠点を除去(source=M → 1VP)。連鎖処理が走る
+    state = remove_piece(state, c, A, ("building", B_BASE), M)
+    als = state.alliance()
+    assert als.bases_placed == (), "base species removed"
+    assert fox not in als.supporters and bird not in als.supporters, "matching+bird discarded"
+    assert als.officers == 1, "officers halved round-up (3 -> remove 2)"
+    assert als.soldiers_supply == 2, "removed officers returned to supply"
+    # 全拠点喪失かつ支援者6枚(>5) → 5枚調整デシジョン
+    assert isinstance(state.pending[-1], SupportersLimitDecision)
+    acts = legal_actions(state)
+    assert acts and all(isinstance(a, AllianceDiscardSupporter) for a in acts)
+    state = apply(state, acts[0], rng)
+    assert not state.pending, "resolved once supporters == 5"
+    assert len(state.alliance().supporters) == 5
+    print("  base removed: bases=%r officers=%d supporters=%d"
+          % (state.alliance().bases_placed, state.alliance().officers,
+             len(state.alliance().supporters)))
+
+
+def test_guerrilla_dice() -> None:
+    """ゲリラ戦(8.2.2): 防御側=連合ならダイス大小の割当が反転する。"""
+    rng = ScriptedRng([5, 2])  # hi=5, lo=2
+    seed = random.Random(6)
+    state = _setup_marquise_alliance(seed)
+    c = 0
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 5).add_soldiers(A, 5))
+    # 奇襲を避けるため両者の手札を空に
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=()))
+    state = _set_alliance(state, hand=())
+
+    state = apply(state, DeclareBattle(player=M, clearing=c, defender=A), rng)
+    decs = {d.victim: d.hits for d in state.pending
+            if isinstance(d, AllocateHitsDecision)}
+    # ゲリラ: 防御側連合(victim=A)は攻撃側の小さい出目2、攻撃側(victim=M)は
+    # 防御側連合の大きい出目5を受ける(通常なら A=5, M=2)。
+    assert decs.get(A) == 2, "alliance defender takes small die (2): %r" % decs
+    assert decs.get(M) == 5, "attacker takes alliance's large die (5): %r" % decs
+    print("  guerrilla: hits victim A=%d, victim M=%d" % (decs[A], decs[M]))
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
@@ -255,6 +467,16 @@ def main() -> int:
     test_eyrie_turmoil()
     print("selftest: eyrie turmoil new generation (7.7.3.I)")
     test_eyrie_turmoil_new_generation()
+    print("selftest: alliance outrage pay from hand (8.2.6)")
+    test_outrage_pay_from_hand()
+    print("selftest: alliance outrage auto-draw (8.2.6)")
+    test_outrage_auto_draw()
+    print("selftest: alliance revolt (8.4.1)")
+    test_revolt()
+    print("selftest: alliance base removal chain (8.2.4)")
+    test_base_removed()
+    print("selftest: alliance guerrilla dice reversal (8.2.2)")
+    test_guerrilla_dice()
     print("OK")
     return 0
 

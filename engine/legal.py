@@ -20,8 +20,10 @@ from .actions import (
     EyrieLeaderDecision,
     EyrieRoostDecision,
     EyrieSetupCornerDecision,
+    OutrageDecision,
     SetupChooseKeep,
     SetupKeepDecision,
+    SupportersLimitDecision,
 )
 from .battle import _matching_ambush, allocate_options
 from .state import GameState
@@ -85,6 +87,16 @@ def _decision_options(state: GameState) -> List[Action]:
         # 止まり木確保(7.4.3)
         from .factions import eyrie
         return eyrie.roost_options(state)
+
+    if isinstance(dec, OutrageDecision):
+        # 蜂起の支払い(8.2.6)
+        from .factions import alliance
+        return alliance.outrage_options(state, dec)
+
+    if isinstance(dec, SupportersLimitDecision):
+        # 全拠点喪失時の支援者5枚調整(8.2.4)
+        from .factions import alliance
+        return alliance.supporters_limit_options(state, dec)
 
     if isinstance(dec, DiscardDecision):
         # 手札を5枚へ(6.6)

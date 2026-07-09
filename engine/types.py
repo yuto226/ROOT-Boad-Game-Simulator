@@ -80,6 +80,10 @@ MARQUISE_BUILDINGS = (B_SAWMILL, B_WORKSHOP, B_RECRUITER)
 # 鷲巣王朝の建物(7.2.1 / 7.5.2.IV)
 B_ROOST = "roost"    # 止まり木タイル(クラフトツールも兼ねる, 7.2.1)
 
+# 森林連合の建物(8.2.4 拠点タイル)。動物種は配置広場のものと常に一致するため
+# Piece には動物種を持たせず、広場の suit から導出する(state.py / DESIGN 3.2)。
+B_BASE = "base"
+
 #: 忠臣カードの擬似ID(7.3.4)。山札に存在しない。動物種=鳥。
 #: 内乱の追放(7.7.2)でも捨て山に行かず勅令エリアに残る。
 LOYAL_VIZIER = "loyal-vizier"

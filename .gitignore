@@ -1,1 +1,18 @@
+# ローカル資料(ルールブックPDF・抽出テキスト・ボードスキャン等。CLAUDE.md参照)
 docs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Claude Code のローカル状態
+.claude/
+
+# シミュレーション出力(フェーズ3以降)
+*.sqlite
+*.parquet

@@ -11,6 +11,16 @@ from typing import Optional, Set
 from . import battle as battle_mod
 from .actions import (
     Action,
+    AllianceDiscardSupporter,
+    AllianceEndOps,
+    AllianceMobilize,
+    AllianceOpBattle,
+    AllianceOpMove,
+    AllianceOpOrganize,
+    AllianceOpRecruit,
+    AllianceRevolt,
+    AllianceSpreadSympathy,
+    AllianceTrain,
     AllocateHit,
     AmbushAttackerDecision,
     AmbushChoice,
@@ -35,9 +45,11 @@ from .actions import (
     MarquiseMarch,
     MarquisePlayBirdCard,
     MarquiseRecruit,
+    OutragePay,
     SetupChooseKeep,
 )
 from .crafting import apply_craft
+from .factions import alliance as alliance_mod
 from .factions import eyrie as eyrie_mod
 from .mechanics import discard_card
 from .state import GameState, MarquiseState
@@ -208,7 +220,10 @@ def _apply_march(state: GameState, action: MarquiseMarch, rng) -> GameState:
     state = state.with_clearing(src.add_soldiers(FactionId.MARQUISE, -action.count))
     dst = state.clearing(action.dst).add_soldiers(FactionId.MARQUISE, action.count)
     state = state.with_clearing(dst)
-    return _spend_action(state)
+    state = _spend_action(state)
+    # 支持広場への兵士移動 → 蜂起(8.2.6)。連合不参加/非支持広場なら no-op
+    state = alliance_mod.outrage_on_move(state, FactionId.MARQUISE, action.dst, rng)
+    return state
 
 
 def _apply_labor(state: GameState, action: MarquiseLabor, rng) -> GameState:
@@ -288,4 +303,16 @@ _HANDLERS = {
     EyrieDecreeBattle: eyrie_mod.apply_decree_battle,
     EyrieDecreeBuild: eyrie_mod.apply_decree_build,
     EyrieTurmoil: eyrie_mod.apply_turmoil,
+    # 森林連合(第8章)。本体は factions/alliance.py
+    AllianceRevolt: alliance_mod.apply_revolt,
+    AllianceSpreadSympathy: alliance_mod.apply_spread,
+    AllianceMobilize: alliance_mod.apply_mobilize,
+    AllianceTrain: alliance_mod.apply_train,
+    AllianceOpMove: alliance_mod.apply_op_move,
+    AllianceOpBattle: alliance_mod.apply_op_battle,
+    AllianceOpRecruit: alliance_mod.apply_op_recruit,
+    AllianceOpOrganize: alliance_mod.apply_op_organize,
+    AllianceEndOps: alliance_mod.apply_end_ops,
+    OutragePay: alliance_mod.apply_outrage_pay,
+    AllianceDiscardSupporter: alliance_mod.apply_discard_supporter,
 }

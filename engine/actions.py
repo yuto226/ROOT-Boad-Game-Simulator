@@ -189,6 +189,85 @@ class EyrieTurmoil(Action):
     """内乱(7.7)。実行不能な勅令の発生時の強制アクション。"""
 
 
+# --- 森林連合固有(第8章) ---
+@dataclass(frozen=True)
+class AllianceRevolt(Action):
+    """反乱(8.4.1)。支持広場に拠点を設立する。"""
+
+    clearing: int
+
+
+@dataclass(frozen=True)
+class AllianceSpreadSympathy(Action):
+    """支持拡大(8.4.2)。非支持広場へ支持トークンを配置する。"""
+
+    clearing: int
+
+
+@dataclass(frozen=True)
+class AllianceMobilize(Action):
+    """動員(8.5.2)。手札1枚を支援者ボックスへ。"""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class AllianceTrain(Action):
+    """訓練(8.5.3)。拠点動物種と一致する手札1枚を捨て、指揮官1個を得る。"""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class AllianceOpMove(Action):
+    """作戦行動・移動(8.6.1.I, 4.2)。"""
+
+    src: int
+    dst: int
+    count: int
+
+
+@dataclass(frozen=True)
+class AllianceOpBattle(Action):
+    """作戦行動・戦闘(8.6.1.II, 4.3)。"""
+
+    clearing: int
+    defender: FactionId
+
+
+@dataclass(frozen=True)
+class AllianceOpRecruit(Action):
+    """作戦行動・募兵(8.6.1.III)。拠点のある広場に兵士1個を配置。"""
+
+    clearing: int
+
+
+@dataclass(frozen=True)
+class AllianceOpOrganize(Action):
+    """作戦行動・組織(8.6.1.IV)。非支持広場の自兵士1個を除去し支持トークン配置。"""
+
+    clearing: int
+
+
+@dataclass(frozen=True)
+class AllianceEndOps(Action):
+    """作戦行動を終え手札調整(8.6.2)へ進む宣言。"""
+
+
+@dataclass(frozen=True)
+class OutragePay(Action):
+    """蜂起の支払い(8.2.6)。card_id=None は一致カードなしで山札トップ補充。"""
+
+    card_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AllianceDiscardSupporter(Action):
+    """全拠点喪失時の支援者5枚調整(8.2.4)での1枚破棄。"""
+
+    card_id: str
+
+
 # ============================================================
 #  Decision(保留スタック要素, 3.2)。各 Decision は actor を持つ。
 # ============================================================
@@ -272,3 +351,19 @@ class EyrieDecreeDecision(Decision):
 @dataclass(frozen=True)
 class EyrieRoostDecision(Decision):
     """止まり木確保(7.4.3)の配置先選択。"""
+
+
+@dataclass(frozen=True)
+class OutrageDecision(Decision):
+    """蜂起の支払い先選択(8.2.6)。actor=支払う他派閥。
+
+    clearing の動物種と一致する手札カード(鳥含む)から1枚を支援者ボックスへ。
+    一致カードがなければ山札トップ1枚が自動で支援者ボックスへ入る。
+    """
+
+    clearing: int = 0
+
+
+@dataclass(frozen=True)
+class SupportersLimitDecision(Decision):
+    """全拠点喪失時の支援者ボックス5枚調整(8.2.4)。actor=森林連合。"""

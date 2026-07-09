@@ -15,6 +15,7 @@ from .board import load_board_defs, load_map
 from .cards import CardIndex, load_card_defs, shuffled_deck
 from .legal import legal_actions
 from .state import (
+    AllianceState,
     ClearingState,
     DummyState,
     EyrieState,
@@ -43,6 +44,9 @@ def _initial_faction_state(faction: FactionId) -> FactionState:
     if faction == FactionId.EYRIE:
         # 7.3.1: 兵士20
         return EyrieState(faction=faction, soldiers_supply=20)
+    if faction == FactionId.ALLIANCE:
+        # 8.3.1: 兵士10(拠点3・支持トークン10は state 側で管理)
+        return AllianceState(faction=faction, soldiers_supply=10)
     if faction == FactionId.DUMMY:
         return DummyState(faction=faction, soldiers_supply=10)
     raise NotImplementedError("faction %s not implemented in phase 1" % faction.value)
@@ -97,9 +101,37 @@ def new_game(factions: Tuple[FactionId, ...], rng: random.Random) -> GameState:
             # 7.3.2 隅の選択 → 7.3.3 君主選択(忠臣配置 7.3.4 は適用側)
             decisions.append(EyrieSetupCornerDecision(actor=f))
             decisions.append(EyrieLeaderDecision(actor=f))
+        elif f == FactionId.ALLIANCE:
+            # 8.3.4 支援者獲得: 山札トップ3枚を支援者ボックスへ(選択なし=Decision不要)
+            state = _setup_alliance_supporters(state, rng)
         # DUMMY はセットアップ選択なし
     if decisions:
         state = state.push_pending(*decisions)
+    return state
+
+
+def _setup_alliance_supporters(state: GameState, rng: random.Random,
+                               n: int = 3) -> GameState:
+    """8.3.4: 山札トップ n 枚を支援者ボックスへ直接配置する。
+
+    手札ドロー(5.1.3)とは別枠。add_supporter を通すため上限(8.2.3.I)も
+    尊重されるが、拠点0・支援者0の初期状態で3枚なので実質そのまま入る。
+    """
+    from .factions.alliance import add_supporter
+    deck = list(state.deck)
+    discard = list(state.discard)
+    drawn: List[str] = []
+    for _ in range(n):
+        if not deck:
+            if not discard:
+                break
+            deck = discard
+            discard = []
+            rng.shuffle(deck)
+        drawn.append(deck.pop())
+    state = state.replace(deck=tuple(deck), discard=tuple(discard))
+    for card in drawn:
+        state = add_supporter(state, card)
     return state
 
 

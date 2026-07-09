@@ -164,6 +164,32 @@ class EyrieState(FactionState):
 
 
 @dataclass(frozen=True)
+class AllianceState(FactionState):
+    """森林連合(ウッドランド・アライアンス)の派閥ボード状態(第8章)。
+
+    支援者ボックス(8.2.3)は手札とは別枠の「第2の手札」。上限は
+    マップ上の拠点タイル枚数が0か否かで切り替わる(8.2.3.I / 8.2.4)。
+    拠点タイルの動物種は配置広場の suit と常に一致するため、``bases_placed``
+    には動物種文字列("fox"等)だけを保持する。未配置拠点=3種との差集合。
+    """
+
+    #: 支援者ボックスのカードID(8.2.3。手札とは別、動物種のみ意味を持つ)
+    supporters: Tuple[str, ...] = ()
+    #: マップ上の支持トークン数(0..10)。支持エリアトラックのインデックスに使う
+    placed_sympathy: int = 0
+    #: マップに配置済み拠点の動物種("fox"/"rabbit"/"mouse")。空=全拠点未配置
+    bases_placed: Tuple[str, ...] = ()
+    #: 指揮官ボックスの兵士数(8.6.1。夕闇の作戦行動回数の上限)
+    officers: int = 0
+    #: 当ターンに実行済みの作戦行動回数(8.6.1。夕闇開始でリセット)
+    ops_used: int = 0
+    #: 作戦行動を終えて手札調整(8.6.2)まで済ませたか(夕闇開始でリセット)
+    ops_done: bool = False
+    #: 起動済みクラフトツール=支持トークンの広場ID(1ターン1回, 4.1.1)
+    used_sympathy_clearings: Tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class DummyState(FactionState):
     """戦闘テスト用の「何もしない」スタブ派閥。"""
 
@@ -212,6 +238,11 @@ class GameState:
     def eyrie(self) -> EyrieState:
         s = self.fs(FactionId.EYRIE)
         assert isinstance(s, EyrieState)
+        return s
+
+    def alliance(self) -> "AllianceState":
+        s = self.fs(FactionId.ALLIANCE)
+        assert isinstance(s, AllianceState)
         return s
 
     def clearing(self, cid: int) -> ClearingState:
