@@ -1,0 +1,159 @@
+[
+  {
+    "id": "errand-rabbit",
+    "name": "Errand",
+    "suit": "rabbit",
+    "items": [
+      "tea",
+      "boots"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-errandbunny.webp"
+  },
+  {
+    "id": "errand-fox",
+    "name": "Errand",
+    "suit": "fox",
+    "items": [
+      "tea",
+      "boots"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-errandfox.webp"
+  },
+  {
+    "id": "escort",
+    "name": "Escort",
+    "suit": "mouse",
+    "items": [
+      "boots",
+      "boots"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-escort.webp"
+  },
+  {
+    "id": "expel-bandits-rabbit",
+    "name": "Expel Bandits",
+    "suit": "rabbit",
+    "items": [
+      "sword",
+      "sword"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-expelbanditsbunny.webp"
+  },
+  {
+    "id": "expel-bandits-mouse",
+    "name": "Expel Bandits",
+    "suit": "mouse",
+    "items": [
+      "sword",
+      "sword"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-expelbanditsmouse.webp"
+  },
+  {
+    "id": "fend-off-a-bear-rabbit",
+    "name": "Fend off a Bear",
+    "suit": "rabbit",
+    "items": [
+      "torch",
+      "crossbow"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-fendoffabearbunny.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "fend-off-a-bear-mouse",
+    "name": "Fend off a Bear",
+    "suit": "mouse",
+    "items": [
+      "torch",
+      "crossbow"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-fendoffabearmouse.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "fundraising",
+    "name": "Fundraising",
+    "suit": "fox",
+    "items": [
+      "tea",
+      "coins"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-fundraising.webp"
+  },
+  {
+    "id": "give-a-speech-rabbit",
+    "name": "Give a Speech",
+    "suit": "rabbit",
+    "items": [
+      "torch",
+      "tea"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-giveaspeechbunny.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "give-a-speech-fox",
+    "name": "Give a Speech",
+    "suit": "fox",
+    "items": [
+      "torch",
+      "tea"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-giveaspeechfox.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "guard-duty-rabbit",
+    "name": "Guard Duty",
+    "suit": "rabbit",
+    "items": [
+      "torch",
+      "sword"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-guarddutybunny.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "guard-duty-mouse",
+    "name": "Guard Duty",
+    "suit": "mouse",
+    "items": [
+      "torch",
+      "sword"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-guarddutymouse.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  },
+  {
+    "id": "logistics-help-fox",
+    "name": "Logistics Help",
+    "suit": "fox",
+    "items": [
+      "boots",
+      "bag"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-logisticshelpfox.webp"
+  },
+  {
+    "id": "logistics-help-mouse",
+    "name": "Logistics Help",
+    "suit": "mouse",
+    "items": [
+      "boots",
+      "bag"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-logisticshelpmouse.webp"
+  },
+  {
+    "id": "repair-a-shed",
+    "name": "Repair a Shed",
+    "suit": "fox",
+    "items": [
+      "torch",
+      "hammer"
+    ],
+    "image": "https://ledercards.netlify.app/cards/root/en-US/quest-repairashed.webp",
+    "note": "Item icon depicted is a torch, which is not among the seven item types produced by base-set craftable cards (boots/bag/crossbow/hammer/sword/tea/coins); included as-is per the card art."
+  }
+]

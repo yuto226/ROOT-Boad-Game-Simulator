@@ -1,0 +1,707 @@
+[
+ {
+  "id": "anvil",
+  "name": "Anvil",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "hammer",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-anvil.webp"
+ },
+ {
+  "id": "armorers",
+  "name": "Armorers",
+  "suit": "bird",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "fox"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "armorers",
+   "text": "In battle, may discard this to ignore all rolled hits taken."
+  },
+  "text": "In battle, may discard this to ignore all rolled hits taken.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-armorers.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "arms-trader",
+  "name": "Arms Trader",
+  "suit": "bird",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "fox",
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "sword",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-armstrader.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "a-visit-to-friends",
+  "name": "A Visit to Friends",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "boots",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-avisittofriends.webp"
+ },
+ {
+  "id": "bake-sale",
+  "name": "Bake Sale",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "coins",
+   "vp": 3
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-bakesale.webp"
+ },
+ {
+  "id": "better-burrow-bank",
+  "name": "Better Burrow Bank",
+  "suit": "rabbit",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "better-burrow-bank",
+   "text": "At start of Birdsong, you may draw one card. If you do, choose an enemy to draw one card."
+  },
+  "text": "At start of Birdsong, you may draw one card. If you do, choose an enemy to draw one card.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-betterburrowbank.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "birdy-bindle",
+  "name": "Birdy Bindle",
+  "suit": "bird",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "bag",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-birdybindle.webp"
+ },
+ {
+  "id": "brutal-tactics",
+  "name": "Brutal Tactics",
+  "suit": "bird",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "fox",
+   "fox"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "brutal-tactics",
+   "text": "In battle as attacker, may deal an extra hit, but defender scores one point."
+  },
+  "text": "In battle as attacker, may deal an extra hit, but defender scores one point.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-brutaltactics.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "cobbler",
+  "name": "Cobbler",
+  "suit": "rabbit",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "cobbler",
+   "text": "At start of Evening, may take a move."
+  },
+  "text": "At start of Evening, may take a move.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-cobbler.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "codebreakers",
+  "name": "Codebreakers",
+  "suit": "mouse",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "codebreakers",
+   "text": "Once in Daylight, may look at another player's hand."
+  },
+  "text": "Once in Daylight, may look at another player's hand.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-codebreakers.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "command-warren",
+  "name": "Command Warren",
+  "suit": "rabbit",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "command-warren",
+   "text": "At start of Daylight, may initiate a battle."
+  },
+  "text": "At start of Daylight, may initiate a battle.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-commandwarren.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "crossbow-bird",
+  "name": "Crossbow",
+  "suit": "bird",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "crossbow",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-crossbowbird.webp"
+ },
+ {
+  "id": "crossbow-mouse",
+  "name": "Crossbow",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "crossbow",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-crossbowmouse.webp"
+ },
+ {
+  "id": "favor-of-the-foxes",
+  "name": "Favor of the Foxes",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox",
+   "fox",
+   "fox"
+  ],
+  "effect": {
+   "type": "immediate",
+   "key": "favor-of-the-foxes",
+   "text": "Remove all enemy pieces in fox clearings, then discard."
+  },
+  "text": "Remove all enemy pieces in fox clearings, then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-favorofthefoxes.webp"
+ },
+ {
+  "id": "favor-of-the-mice",
+  "name": "Favor of the Mice",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse",
+   "mouse",
+   "mouse"
+  ],
+  "effect": {
+   "type": "immediate",
+   "key": "favor-of-the-mice",
+   "text": "Remove all enemy pieces in mouse clearings, then discard."
+  },
+  "text": "Remove all enemy pieces in mouse clearings, then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-favorofthemice.webp"
+ },
+ {
+  "id": "favor-of-the-rabbits",
+  "name": "Favor of the Rabbits",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "immediate",
+   "key": "favor-of-the-rabbits",
+   "text": "Remove all enemy pieces in rabbit clearings, then discard."
+  },
+  "text": "Remove all enemy pieces in rabbit clearings, then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-favoroftherabbits.webp"
+ },
+ {
+  "id": "foxfolk-steel",
+  "name": "Foxfolk Steel",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox",
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "sword",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-foxfolksteel.webp"
+ },
+ {
+  "id": "gently-used-knapsack",
+  "name": "Gently Used Knapsack",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "bag",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-gentlyusedknapsack.webp"
+ },
+ {
+  "id": "investments",
+  "name": "Investments",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "coins",
+   "vp": 3
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-investments.webp"
+ },
+ {
+  "id": "mouse-in-a-sack",
+  "name": "Mouse-in-a-Sack",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "bag",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-mouseinasack.webp"
+ },
+ {
+  "id": "protection-racket",
+  "name": "Protection Racket",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "coins",
+   "vp": 3
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-protectionracket.webp"
+ },
+ {
+  "id": "root-tea-rabbit",
+  "name": "Root Tea",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "tea",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-rootteabunny.webp"
+ },
+ {
+  "id": "root-tea-fox",
+  "name": "Root Tea",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "tea",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-rootteafox.webp"
+ },
+ {
+  "id": "root-tea-mouse",
+  "name": "Root Tea",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "tea",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-rootteamouse.webp"
+ },
+ {
+  "id": "royal-claim",
+  "name": "Royal Claim",
+  "suit": "bird",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "any",
+   "any",
+   "any",
+   "any"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "royal-claim",
+   "text": "In Birdsong, may discard this to score one point per clearing you rule."
+  },
+  "text": "In Birdsong, may discard this to score one point per clearing you rule.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-royalclaim.webp"
+ },
+ {
+  "id": "sappers",
+  "name": "Sappers",
+  "suit": "bird",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "sappers",
+   "text": "In battle as defender, may discard this to deal an extra hit."
+  },
+  "text": "In battle as defender, may discard this to deal an extra hit.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-sappers.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "scouting-party",
+  "name": "Scouting Party",
+  "suit": "mouse",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "mouse",
+   "mouse"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "scouting-party",
+   "text": "As attacker in battle, you are not affected by ambush cards."
+  },
+  "text": "As attacker in battle, you are not affected by ambush cards.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-scoutingparty.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "smugglers-trail",
+  "name": "Smuggler's Trail",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "mouse"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "bag",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-smugglerstrail.webp"
+ },
+ {
+  "id": "stand-and-deliver",
+  "name": "Stand and Deliver!",
+  "suit": "fox",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "mouse",
+   "mouse",
+   "mouse"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "stand-and-deliver",
+   "text": "Once in Birdsong, you may take a random card from an enemy. If you do, they score one point."
+  },
+  "text": "Once in Birdsong, you may take a random card from an enemy. If you do, they score one point.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-standanddeliver.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "sword",
+  "name": "Sword",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "fox",
+   "fox"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "sword",
+   "vp": 2
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-sword.webp"
+ },
+ {
+  "id": "tax-collector",
+  "name": "Tax Collector",
+  "suit": "fox",
+  "copies": 2,
+  "kind": "craftable",
+  "cost": [
+   "rabbit",
+   "fox",
+   "mouse"
+  ],
+  "effect": {
+   "type": "persistent",
+   "key": "tax-collector",
+   "text": "Once in Daylight, may remove a warrior of your faction from a clearing on the map to draw one card."
+  },
+  "text": "Once in Daylight, may remove a warrior of your faction from a clearing on the map to draw one card.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-taxcollector.webp",
+  "note": "×2枚は動物種合計(13/13/13/15)とユニーク名32種の制約からの導出。要実物検証"
+ },
+ {
+  "id": "travel-gear-fox",
+  "name": "Travel Gear",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "boots",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-travelgearfox.webp"
+ },
+ {
+  "id": "travel-gear-mouse",
+  "name": "Travel Gear",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "boots",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-travelgearmouse.webp"
+ },
+ {
+  "id": "woodland-runners",
+  "name": "Woodland Runners",
+  "suit": "bird",
+  "copies": 1,
+  "kind": "craftable",
+  "cost": [
+   "rabbit"
+  ],
+  "effect": {
+   "type": "item",
+   "item": "boots",
+   "vp": 1
+  },
+  "text": "Then discard.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-woodlandrunners.webp"
+ },
+ {
+  "id": "ambush-fox",
+  "name": "Ambush!",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "ambush",
+  "cost": null,
+  "effect": null,
+  "text": "You may only ambush in a fox clearing. At start of battle, defender may play to deal two immediate hits, then discard. Cancel if attacker plays matching ambush.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-ambushfox.webp",
+  "note": "奇襲の枚数は根の法典2.1.2で確定(鳥2・キツネ/ウサギ/ネズミ各1)"
+ },
+ {
+  "id": "ambush-rabbit",
+  "name": "Ambush!",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "ambush",
+  "cost": null,
+  "effect": null,
+  "text": "You may only ambush in a rabbit clearing. At start of battle, defender may play to deal two immediate hits, then discard. Cancel if attacker plays matching ambush.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-ambushbunny.webp",
+  "note": "奇襲の枚数は根の法典2.1.2で確定(鳥2・キツネ/ウサギ/ネズミ各1)"
+ },
+ {
+  "id": "ambush-mouse",
+  "name": "Ambush!",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "ambush",
+  "cost": null,
+  "effect": null,
+  "text": "You may only ambush in a mouse clearing. At start of battle, defender may play to deal two immediate hits, then discard. Cancel if attacker plays matching ambush.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-ambushmouse.webp",
+  "note": "奇襲の枚数は根の法典2.1.2で確定(鳥2・キツネ/ウサギ/ネズミ各1)"
+ },
+ {
+  "id": "ambush-bird",
+  "name": "Ambush!",
+  "suit": "bird",
+  "copies": 2,
+  "kind": "ambush",
+  "cost": null,
+  "effect": null,
+  "text": "You may ambush in any clearing. At start of battle, defender may play to deal two immediate hits, then discard. Cancel if attacker plays matching ambush.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-ambushbird.webp",
+  "note": "奇襲の枚数は根の法典2.1.2で確定(鳥2・キツネ/ウサギ/ネズミ各1)"
+ },
+ {
+  "id": "dominance-fox",
+  "name": "Dominance",
+  "suit": "fox",
+  "copies": 1,
+  "kind": "dominance",
+  "cost": null,
+  "effect": null,
+  "text": "If spent for suit, make available. If you have at least 10 points, play during Daylight and remove your score marker. You win the game if you rule three fox clearings at the start of your Birdsong.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-dominancefox.webp"
+ },
+ {
+  "id": "dominance-rabbit",
+  "name": "Dominance",
+  "suit": "rabbit",
+  "copies": 1,
+  "kind": "dominance",
+  "cost": null,
+  "effect": null,
+  "text": "If spent for suit, make available. If you have at least 10 points, play during Daylight and remove your score marker. You win the game if you rule three rabbit clearings at the start of your Birdsong.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-dominancebunny.webp"
+ },
+ {
+  "id": "dominance-mouse",
+  "name": "Dominance",
+  "suit": "mouse",
+  "copies": 1,
+  "kind": "dominance",
+  "cost": null,
+  "effect": null,
+  "text": "If spent for suit, make available. If you have at least 10 points, play during Daylight and remove your score marker. You win the game if you rule three mouse clearings at the start of your Birdsong.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-dominancemouse.webp"
+ },
+ {
+  "id": "dominance-bird",
+  "name": "Dominance",
+  "suit": "bird",
+  "copies": 1,
+  "kind": "dominance",
+  "cost": null,
+  "effect": null,
+  "text": "If spent for suit, make available. If you have at least 10 points, play during Daylight and remove your score marker. You win the game if you rule two opposite corners at the start of your Birdsong.",
+  "image": "https://ledercards.netlify.app/cards/root/en-US/card-dominancebird.webp"
+ }
+]
