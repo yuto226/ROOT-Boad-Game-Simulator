@@ -74,13 +74,14 @@ def reachable_wood(state: GameState, clearing: int) -> int:
 def visible_card_icons(state: GameState) -> int:
     """派閥ボード上に見えているカードアイコン数(6.6)。
 
-    募兵所を建てるほど(マップ上の募兵所が増えるほど)アイコンが露出。
-    boards.json の card_icon_slots["recruiter"] のしきい値で判定。
+    アイコンはトラックの0-indexedスロット位置(boards.json)にあり、
+    そのスロットのタイルがマップに出た時(=配置数がslot+1以上)に露出する。
+    実物ボード確認済み: 募兵所スロット2,4(3枚目・5枚目の配置で+1ずつ)。
     """
     ms = state.marquise()
     slots = state.board_defs["marquise"]["card_icon_slots"].get("recruiter", [])
     built = ms.built_recruiter
-    return sum(1 for v in slots if built >= v)
+    return sum(1 for v in slots if built >= v + 1)
 
 
 # ---------------- ロジック ----------------

@@ -1,8 +1,91 @@
-{"_verified": false,
- "marquise": {"building_costs": [0, 1, 2, 3, 3, 4],
-              "building_vp": {"sawmill": [0,1,2,3,4,5], "workshop": [0,2,2,3,4,5], "recruiter": [0,1,2,3,3,4]},
-              "card_icon_slots": {"recruiter": [2, 4]}},
- "eyrie": {"roost_vp": [0, 0, 1, 2, 3, 4, 5], "roost_card_icon_slots": [3, 5]},
- "alliance": {"sympathy_costs": [1,1,1,2,2,2,3,3,3,3],
-              "sympathy_vp": [0,1,1,1,2,2,3,4,4,4],
-              "base_card_icons_per_base": 1}}
+{
+ "_verified": true,
+ "_source": "ユーザー提供の公式ボードスキャン(docs/Original Board Datas/Root Board Front.pdf p1-p3)をFableが視覚読取(2026-07-09)",
+ "_semantics": "card_icon_slotsは0-indexedのスロット番号。そのスロットのタイルが盤面(マップ)に出た時=配置数がslot+1以上の時にアイコンが露出する。トラックのタイルは最左から取り、除去時は最右の空き枠に戻る(ユーザー確認済み)。",
+ "marquise": {
+  "building_costs": [
+   0,
+   1,
+   2,
+   3,
+   3,
+   4
+  ],
+  "building_vp": {
+   "sawmill": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "workshop": [
+    0,
+    2,
+    2,
+    3,
+    4,
+    5
+   ],
+   "recruiter": [
+    0,
+    1,
+    2,
+    3,
+    3,
+    4
+   ]
+  },
+  "card_icon_slots": {
+   "recruiter": [
+    2,
+    4
+   ]
+  }
+ },
+ "eyrie": {
+  "roost_vp": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   4,
+   5
+  ],
+  "roost_card_icon_slots": [
+   2,
+   5
+  ],
+  "_note": "7枠。夕闇のVP獲得=最右の空き枠のVP=マップ上の止まり木がn枚ならroost_vp[n-1](n=0なら0VP)。ドロー枚数=1+露出アイコン数(止まり木3枚目で+1、6枚目でさらに+1)。"
+ },
+ "alliance": {
+  "sympathy_costs": [
+   1,
+   1,
+   1,
+   2,
+   2,
+   2,
+   3,
+   3,
+   3,
+   3
+  ],
+  "sympathy_vp": [
+   1,
+   1,
+   1,
+   2,
+   2,
+   3,
+   4,
+   4,
+   4,
+   4
+  ],
+  "base_card_icons_per_base": 1,
+  "_note": "支持トークンは最左から取る。n個目の配置でsympathy_vp[n-1]を獲得、次のコストはsympathy_costs[配置済み数]。拠点1枚マップに出るごとにドロー+1。"
+ }
+}
