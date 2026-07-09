@@ -159,5 +159,49 @@
    "_pos": "南東隅(池)"
   }
  ],
- "forests": []
+ "_forests_note": "樹林=経路と広場に囲まれた森領域(放浪部族専用)。公式スキャンの視覚読取+経路グラフの面分割から導出(2026-07-09)。隣接樹林=経路1本だけを挟んで接する樹林(広場の角だけで接する場合は非隣接)。",
+ "forests": [
+  {
+   "id": 0,
+   "adjacent_clearings": [0, 1, 2, 4],
+   "adjacent_forests": [1, 2],
+   "_pos": "北(広場0-1-2-4に囲まれた森)"
+  },
+  {
+   "id": 1,
+   "adjacent_clearings": [0, 3, 4, 7],
+   "adjacent_forests": [0, 2, 3],
+   "_pos": "北西中央(広場0-3-7-4)"
+  },
+  {
+   "id": 2,
+   "adjacent_clearings": [2, 4, 5, 6, 7],
+   "adjacent_forests": [0, 1, 4, 6],
+   "_pos": "中央東(広場2-4-7-5-6の五角形、最大の森)"
+  },
+  {
+   "id": 3,
+   "adjacent_clearings": [3, 7, 8, 9],
+   "adjacent_forests": [1, 4],
+   "_pos": "南西(広場3-7-9-8)"
+  },
+  {
+   "id": 4,
+   "adjacent_clearings": [5, 7, 9, 10],
+   "adjacent_forests": [2, 3, 5],
+   "_pos": "南中央(広場7-5-10-9)"
+  },
+  {
+   "id": 5,
+   "adjacent_clearings": [5, 10, 11],
+   "adjacent_forests": [4, 6],
+   "_pos": "南東(広場5-10-11の三角形)"
+  },
+  {
+   "id": 6,
+   "adjacent_clearings": [5, 6, 11],
+   "adjacent_forests": [2, 5],
+   "_pos": "東(広場5-6-11の三角形)"
+  }
+ ]
 }

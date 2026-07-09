@@ -60,6 +60,26 @@
   ],
   "_note": "7枠。夕闇のVP獲得=最右の空き枠のVP=マップ上の止まり木がn枚ならroost_vp[n-1](n=0なら0VP)。ドロー枚数=1+露出アイコン数(止まり木3枚目で+1、6枚目でさらに+1)。"
  },
+ "vagabond": {
+  "relationship_aid_costs": [1, 2, 3],
+  "relationship_vp": [1, 2, 2],
+  "allied_aid_vp": 2,
+  "track_slots_per_kind": 3,
+  "refresh_base": 3,
+  "refresh_per_tea": 2,
+  "draw_per_coin": 1,
+  "item_limit_base": 6,
+  "item_limit_per_bag": 2,
+  "ruin_items": ["bag", "boots", "hammer", "sword"],
+  "characters": {
+   "thief": {"start_items": ["boots", "torch", "tea", "sword"], "special": "steal"},
+   "tinker": {"start_items": ["boots", "torch", "bag", "hammer"], "special": "day_labor"},
+   "ranger": {"start_items": ["boots", "torch", "crossbow", "sword"], "special": "hideout"}
+  },
+  "_note": "関係トラック(9.2.9): 無関心→[援助1回]→+1VP→[2回]→+2VP→[3回]→同盟(+2VP)。同盟後は援助毎+2VP。aid_costs[i]=マスiの右辺の数字(i=0が無関心)。relationship_vp[i]=マスi+1到達時のVP。配置枠(9.2.5.I)=T/X/B各3枠。回復(9.4.1)=3+表T×2。ドロー(9.6.2)=1+表X。上限(9.6.4)=6+表B×2(配置枠は数えない)。キャラ初期アイテムと特別アクションは追補D(D.1〜D.3)。記号対応: M=boots,S=sword,C=crossbow,F=torch,H=hammer,T=tea,X=coins,B=bag",
+  "_verified": true,
+  "_source": "公式ボードスキャン(docs/Original Board Datas/Root Board Front.pdf p4)をFableが視覚読取(2026-07-09)+根の法典 追補D(p25)"
+ },
  "alliance": {
   "sympathy_costs": [
    1,
