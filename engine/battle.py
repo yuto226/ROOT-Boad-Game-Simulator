@@ -24,6 +24,7 @@ from .actions import (
 )
 from .state import GameState
 from .types import (
+    B_ROOST,
     FactionId,
     MARQUISE_BUILDINGS,
     Piece,
@@ -33,6 +34,13 @@ from .types import (
 )
 
 
+def _eyrie_leader(state: GameState) -> Optional[str]:
+    """鷲巣王朝の現君主(不参加なら None)。"""
+    if FactionId.EYRIE not in state.factions:
+        return None
+    return state.eyrie().leader
+
+
 # ---------------- 除去(3.5) ----------------
 def _award_vp(state: GameState, faction: FactionId, vp: int) -> GameState:
     fs = state.fs(faction)
@@ -40,14 +48,35 @@ def _award_vp(state: GameState, faction: FactionId, vp: int) -> GameState:
 
 
 def _return_building_to_board(state: GameState, victim: FactionId, kind: str) -> GameState:
-    """建物タイルを派閥ボードの最右空き枠へ(3.5)。猫は built_count を減らす。"""
+    """建物タイルを派閥ボードの最右空き枠へ(3.5)。猫は built_count を減らす。
+
+    鷲巣の止まり木は built_roosts を減らす(7.6.1 のVP計算と連動)。
+    """
     if victim == FactionId.MARQUISE and kind in MARQUISE_BUILDINGS:
         ms = state.marquise()
         field = {"sawmill": "built_sawmill", "workshop": "built_workshop",
                  "recruiter": "built_recruiter"}[kind]
         cur = getattr(ms, field)
         return state.with_faction_state(dataclasses.replace(ms, **{field: max(0, cur - 1)}))
+    if victim == FactionId.EYRIE and kind == B_ROOST:
+        es = state.eyrie()
+        return state.with_faction_state(dataclasses.replace(
+            es, built_roosts=max(0, es.built_roosts - 1)))
     return state
+
+
+def _maybe_despot_vp(state: GameState, source: Optional[FactionId]) -> GameState:
+    """独裁者(7.8.4): 鷲巣が敵の建物/専用トークンを1個以上除去した戦闘で
+    追加1VP(1戦闘につき1回まで)。フラグは declare_battle でリセットされる。
+    """
+    if source != FactionId.EYRIE or _eyrie_leader(state) != "despot":
+        return state
+    es = state.eyrie()
+    if es.despot_awarded:
+        return state
+    state = _award_vp(state, FactionId.EYRIE, 1)
+    return state.with_faction_state(
+        dataclasses.replace(state.eyrie(), despot_awarded=True))
 
 
 def _return_token_to_supply(state: GameState, victim: FactionId, kind: str) -> GameState:
@@ -78,6 +107,7 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         state = _return_building_to_board(state, victim, target[1])
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
+            state = _maybe_despot_vp(state, source)  # 7.8.4
         return state
     if kind == "token":
         cs = cs.remove_one_token(victim, target[1])
@@ -85,6 +115,7 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         state = _return_token_to_supply(state, victim, target[1])
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
+            state = _maybe_despot_vp(state, source)  # 7.8.4
         return state
     raise ValueError("unknown removal target %r" % (target,))
 
@@ -149,6 +180,9 @@ def _roll_and_allocate(state: GameState, ctx: BattleCtx, rng) -> GameState:
     # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)
     atk_hits = min(hi, atk_sol) + (1 if def_sol == 0 else 0)
     def_hits = min(lo, def_sol)
+    # 司令官(7.8.3): 鷲巣が攻撃側なら追加1ヒット(4.3.3.I, 出目上限の対象外)
+    if ctx.attacker == FactionId.EYRIE and _eyrie_leader(state) == "commander":
+        atk_hits += 1
     return _push_allocations(state, ctx, atk_hits, def_hits)
 
 
@@ -167,6 +201,13 @@ def declare_battle(state: GameState, action: DeclareBattle, rng) -> GameState:
     """戦闘宣言(4.3)。防御側に奇襲機会があれば積み、なければ即ロール。"""
     ctx = BattleCtx(attacker=action.player, defender=action.defender,
                     clearing=action.clearing)
+    # 独裁者VP(7.8.4)の1戦闘1回フラグをリセット(戦闘は入れ子にならない)
+    if (FactionId.EYRIE in (ctx.attacker, ctx.defender)
+            and FactionId.EYRIE in state.factions):
+        es = state.eyrie()
+        if es.despot_awarded:
+            state = state.with_faction_state(
+                dataclasses.replace(es, despot_awarded=False))
     if _matching_ambush(state, ctx.defender, ctx.clearing) is not None:
         return state.push_pending(AmbushDefenderDecision(actor=ctx.defender, ctx=ctx))
     return _roll_and_allocate(state, ctx, rng)

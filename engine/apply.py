@@ -20,6 +20,16 @@ from .actions import (
     DiscardCard,
     DiscardDecision,
     EndPhase,
+    EyrieAddToDecree,
+    EyrieChooseCorner,
+    EyrieChooseLeader,
+    EyrieDecreeBattle,
+    EyrieDecreeBuild,
+    EyrieDecreeMove,
+    EyriePlaceRoost,
+    EyrieRecruit,
+    EyrieSkipDecree,
+    EyrieTurmoil,
     MarquiseBuild,
     MarquiseLabor,
     MarquiseMarch,
@@ -28,6 +38,7 @@ from .actions import (
     SetupChooseKeep,
 )
 from .crafting import apply_craft
+from .factions import eyrie as eyrie_mod
 from .mechanics import discard_card
 from .state import GameState, MarquiseState
 from .types import (
@@ -266,4 +277,15 @@ _HANDLERS = {
     AllocateHit: _apply_allocate_hit,
     DiscardCard: _apply_discard,
     CraftCard: _apply_craft,
+    # 鷲巣王朝(第7章)。本体は factions/eyrie.py
+    EyrieChooseCorner: eyrie_mod.apply_choose_corner,
+    EyrieChooseLeader: eyrie_mod.apply_choose_leader,
+    EyrieAddToDecree: eyrie_mod.apply_add_to_decree,
+    EyrieSkipDecree: eyrie_mod.apply_skip_decree,
+    EyriePlaceRoost: eyrie_mod.apply_place_roost,
+    EyrieRecruit: eyrie_mod.apply_decree_recruit,
+    EyrieDecreeMove: eyrie_mod.apply_decree_move,
+    EyrieDecreeBattle: eyrie_mod.apply_decree_battle,
+    EyrieDecreeBuild: eyrie_mod.apply_decree_build,
+    EyrieTurmoil: eyrie_mod.apply_turmoil,
 }

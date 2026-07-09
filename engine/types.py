@@ -77,6 +77,16 @@ B_WORKSHOP = "workshop"
 B_RECRUITER = "recruiter"
 MARQUISE_BUILDINGS = (B_SAWMILL, B_WORKSHOP, B_RECRUITER)
 
+# 鷲巣王朝の建物(7.2.1 / 7.5.2.IV)
+B_ROOST = "roost"    # 止まり木タイル(クラフトツールも兼ねる, 7.2.1)
+
+#: 忠臣カードの擬似ID(7.3.4)。山札に存在しない。動物種=鳥。
+#: 内乱の追放(7.7.2)でも捨て山に行かず勅令エリアに残る。
+LOYAL_VIZIER = "loyal-vizier"
+
+#: 君主カード4種(7.8)
+EYRIE_LEADERS = ("builder", "charismatic", "commander", "despot")
+
 # トークン
 T_KEEP = "keep"      # 城砦(6.2.2)
 T_WOOD = "wood"      # 木材(6.4)

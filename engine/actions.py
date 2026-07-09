@@ -114,6 +114,81 @@ class SetupChooseKeep(Action):
     corner: str
 
 
+# --- 鷲巣王朝固有(第7章) ---
+@dataclass(frozen=True)
+class EyrieChooseCorner(Action):
+    """開始時広場の隅選択(7.3.2)。"""
+
+    corner: str
+
+
+@dataclass(frozen=True)
+class EyrieChooseLeader(Action):
+    """君主カードの選択(7.3.3 セットアップ / 7.7.3 失脚)。"""
+
+    leader: str
+
+
+@dataclass(frozen=True)
+class EyrieAddToDecree(Action):
+    """勅令追加(7.4.2)。column: 0=募兵 1=移動 2=戦闘 3=建設。"""
+
+    card_id: str
+    column: int
+
+
+@dataclass(frozen=True)
+class EyrieSkipDecree(Action):
+    """勅令追加の2枚目を追加しない(7.4.2, 1枚目は強制)。"""
+
+
+@dataclass(frozen=True)
+class EyriePlaceRoost(Action):
+    """止まり木確保(7.4.3): 止まり木1+兵士3の配置先。"""
+
+    clearing: int
+
+
+@dataclass(frozen=True)
+class EyrieRecruit(Action):
+    """勅令の募兵(7.5.2.I)。カリスマは兵士2個(7.8.2)。"""
+
+    card_id: str
+    clearing: int
+
+
+@dataclass(frozen=True)
+class EyrieDecreeMove(Action):
+    """勅令の移動(7.5.2.II, 4.2)。"""
+
+    card_id: str
+    src: int
+    dst: int
+    count: int
+
+
+@dataclass(frozen=True)
+class EyrieDecreeBattle(Action):
+    """勅令の戦闘(7.5.2.III, 4.3)。"""
+
+    card_id: str
+    clearing: int
+    defender: FactionId
+
+
+@dataclass(frozen=True)
+class EyrieDecreeBuild(Action):
+    """勅令の建設(7.5.2.IV): 止まり木タイル1枚を配置。"""
+
+    card_id: str
+    clearing: int
+
+
+@dataclass(frozen=True)
+class EyrieTurmoil(Action):
+    """内乱(7.7)。実行不能な勅令の発生時の強制アクション。"""
+
+
 # ============================================================
 #  Decision(保留スタック要素, 3.2)。各 Decision は actor を持つ。
 # ============================================================
@@ -166,3 +241,34 @@ class AllocateHitsDecision(Decision):
 @dataclass(frozen=True)
 class DiscardDecision(Decision):
     """手札を5枚に減らす(6.6)。"""
+
+
+@dataclass(frozen=True)
+class EyrieSetupCornerDecision(Decision):
+    """開始時広場の隅を選ぶ(7.3.2)。"""
+
+
+@dataclass(frozen=True)
+class EyrieLeaderDecision(Decision):
+    """君主カードを選ぶ(7.3.3 セットアップ / 7.7.3 失脚)。
+
+    turmoil=True なら選択後に休止(7.7.4)で夕闇フェイズへ直行する。
+    """
+
+    turmoil: bool = False
+
+
+@dataclass(frozen=True)
+class EyrieDecreeDecision(Decision):
+    """勅令への追加(7.4.2)。first=True は1枚目(追加は強制)。
+
+    bird_added: 1枚目に鳥カードを追加済みか(鳥2枚同時は不可)。
+    """
+
+    first: bool = True
+    bird_added: bool = False
+
+
+@dataclass(frozen=True)
+class EyrieRoostDecision(Decision):
+    """止まり木確保(7.4.3)の配置先選択。"""

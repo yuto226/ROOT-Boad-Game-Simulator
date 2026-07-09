@@ -5,12 +5,23 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from .actions import SetupKeepDecision
+from .actions import (
+    EyrieLeaderDecision,
+    EyrieSetupCornerDecision,
+    SetupKeepDecision,
+)
 from .apply import apply
 from .board import load_board_defs, load_map
 from .cards import CardIndex, load_card_defs, shuffled_deck
 from .legal import legal_actions
-from .state import ClearingState, DummyState, FactionState, GameState, MarquiseState
+from .state import (
+    ClearingState,
+    DummyState,
+    EyrieState,
+    FactionState,
+    GameState,
+    MarquiseState,
+)
 from .types import FactionId, ItemKind, Phase
 
 #: 共通サプライのアイテム(5.1.5)
@@ -29,6 +40,9 @@ def _initial_faction_state(faction: FactionId) -> FactionState:
     if faction == FactionId.MARQUISE:
         # 6.3.1: 兵士25・木材8
         return MarquiseState(faction=faction, soldiers_supply=25, wood_supply=8)
+    if faction == FactionId.EYRIE:
+        # 7.3.1: 兵士20
+        return EyrieState(faction=faction, soldiers_supply=20)
     if faction == FactionId.DUMMY:
         return DummyState(faction=faction, soldiers_supply=10)
     raise NotImplementedError("faction %s not implemented in phase 1" % faction.value)
@@ -79,6 +93,10 @@ def new_game(factions: Tuple[FactionId, ...], rng: random.Random) -> GameState:
             continue
         if f == FactionId.MARQUISE:
             decisions.append(SetupKeepDecision(actor=f))
+        elif f == FactionId.EYRIE:
+            # 7.3.2 隅の選択 → 7.3.3 君主選択(忠臣配置 7.3.4 は適用側)
+            decisions.append(EyrieSetupCornerDecision(actor=f))
+            decisions.append(EyrieLeaderDecision(actor=f))
         # DUMMY はセットアップ選択なし
     if decisions:
         state = state.push_pending(*decisions)

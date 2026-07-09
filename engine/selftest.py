@@ -1,10 +1,12 @@
-"""戦闘 pending スタック機構の自己テスト。
+"""戦闘 pending スタック機構と鷲巣王朝の内乱(7.7)の自己テスト。
 
 使い方: ``python3 -m engine.selftest``
 
-猫野侯国 + 「何もしないスタブ派閥」(DUMMY)の2派閥手動シナリオで、
-戦闘1回(4.3 の4ステップ)が保留デシジョンスタック(3.2)経由で
-解決できることを確認する。奇襲(4.3.1)パスも検証する。
+1. 猫野侯国 + 「何もしないスタブ派閥」(DUMMY)の2派閥手動シナリオで、
+   戦闘1回(4.3 の4ステップ)が保留デシジョンスタック(3.2)経由で
+   解決できることを確認する。奇襲(4.3.1)パスも検証する。
+2. 猫+鷲巣の2派閥シナリオで、実行不能な勅令による内乱(7.7)の
+   VP喪失(クランプ含む)・忠臣残存・君主交代・夕闇直行を検証する。
 """
 from __future__ import annotations
 
@@ -18,16 +20,30 @@ from .actions import (
     AmbushChoice,
     AmbushDefenderDecision,
     DeclareBattle,
+    EndPhase,
+    EyrieChooseCorner,
+    EyrieChooseLeader,
+    EyrieTurmoil,
     SetupChooseKeep,
 )
 from .apply import apply
 from .game import new_game
 from .legal import legal_actions
 from .state import GameState
-from .types import FactionId, Piece, B_SAWMILL
+from .types import (
+    B_ROOST,
+    B_SAWMILL,
+    Corner,
+    FactionId,
+    LOYAL_VIZIER,
+    Phase,
+    Piece,
+    Suit,
+)
 
 M = FactionId.MARQUISE
 D = FactionId.DUMMY
+E = FactionId.EYRIE
 
 
 def _setup_two_faction(rng: random.Random) -> GameState:
@@ -126,11 +142,119 @@ def test_ambush_via_pending() -> None:
     print("  ambush resolved: M soldiers %d->%d" % (before_m, state.clearing(1).soldier_count(M)))
 
 
+# ---------------- 鷲巣王朝: 内乱(7.7) ----------------
+def _setup_eyrie_pre_turmoil(rng: random.Random, used_leaders=()) -> GameState:
+    """猫(城砦NW)+鷲巣(隅SE, 君主カリスマ)を作り、内乱直前まで進める。
+
+    勅令の募兵列に鳥カード+キツネカードを追加した上で、マップ上の
+    止まり木を全撤去して募兵(7.5.2.I)を実行不能にする。
+    """
+    state = new_game((M, E), rng)
+    state = apply(state, SetupChooseKeep(player=M, corner="NW"), rng)
+
+    # 7.3.2: 城砦が隅NWにあるので、鷲巣の隅は対角SEが強制される
+    acts = legal_actions(state)
+    assert acts == [EyrieChooseCorner(player=E, corner="SE")], (
+        "対角の隅が強制されるはず(7.3.2): %r" % acts)
+    state = apply(state, acts[0], rng)
+
+    # 7.3.3: 君主4枚から選択 → カリスマ(忠臣は募兵・戦闘列, 7.8.2)
+    acts = legal_actions(state)
+    assert len(acts) == 4 and all(isinstance(a, EyrieChooseLeader) for a in acts)
+    state = apply(state, EyrieChooseLeader(player=E, leader="charismatic"), rng)
+    assert not state.pending
+    es = state.fs(E)
+    assert es.decree == ((LOYAL_VIZIER,), (), (LOYAL_VIZIER,), ())
+
+    # 勅令に鳥1枚+キツネ1枚を注入(鳥計3枚: 忠臣2+鳥1)
+    bird_card = fox_card = None
+    for d in state.cards.defs:
+        if d.is_dominance:
+            continue  # 2人戦の山札に存在しないカードは避ける(5.1.3)
+        if bird_card is None and d.suit == Suit.BIRD:
+            bird_card = d.id
+        if fox_card is None and d.suit == Suit.FOX:
+            fox_card = d.id
+    assert bird_card and fox_card
+    decree = ((LOYAL_VIZIER, bird_card, fox_card), (), (LOYAL_VIZIER,), ())
+
+    # マップ上の止まり木を全撤去 → 募兵列(最左)が実行不能
+    corner_cid = state.map.corner_clearing(Corner.SE)
+    state = state.with_clearing(
+        state.clearing(corner_cid).remove_building(Piece(E, B_ROOST)))
+
+    es = state.fs(E)
+    es = dataclasses.replace(
+        es, vp=1, hand=(), decree=decree, decree_remaining=decree,
+        decree_started=False, built_roosts=0, used_leaders=tuple(used_leaders))
+    state = state.with_faction_state(es)
+    # 鷲巣の昼光フェイズにする
+    return state.replace(turn_index=state.factions.index(E), phase=Phase.DAYLIGHT)
+
+
+def test_eyrie_turmoil() -> None:
+    """内乱: VP喪失(0にクランプ)・追放・忠臣残存・君主交代・夕闇直行。"""
+    rng = random.Random(3)
+    state = _setup_eyrie_pre_turmoil(rng)
+    bird_card = state.fs(E).decree[0][1]
+    fox_card = state.fs(E).decree[0][2]
+
+    # 実行不能な勅令 → 合法手は内乱のみ(7.5.2)
+    acts = legal_actions(state)
+    assert acts == [EyrieTurmoil(player=E)], "内乱が強制されるはず: %r" % acts
+    state = apply(state, acts[0], rng)
+
+    es = state.fs(E)
+    # 7.7.1 恥辱: VP1 - 鳥3枚(忠臣2+鳥1) → 0未満にはしない
+    assert es.vp == 0, "VP must clamp at 0, got %d" % es.vp
+    # 7.7.2 追放: 忠臣以外は捨て山へ、忠臣は捨て山に行かない
+    assert bird_card in state.discard and fox_card in state.discard
+    assert LOYAL_VIZIER not in state.discard
+    # 7.7.3 失脚: カリスマは裏向きへ
+    assert es.leader is None and es.used_leaders == ("charismatic",)
+
+    # 君主交代 Decision: 表向きの3枚から選択
+    acts = legal_actions(state)
+    assert sorted(a.leader for a in acts) == ["builder", "commander", "despot"]
+    state = apply(state, EyrieChooseLeader(player=E, leader="despot"), rng)
+
+    es = state.fs(E)
+    # 忠臣2枚が新君主の指定列(独裁者=移動・建設, 7.8.4)へ
+    assert es.decree == ((), (LOYAL_VIZIER,), (), (LOYAL_VIZIER,))
+    assert es.leader == "despot"
+    # 7.7.4 休止: 昼光を即終了して夕闇へ(VP 0枚=0, ドロー1+0)
+    assert state.phase == Phase.EVENING
+    assert es.vp == 0
+    assert len(es.hand) == 1, "evening draw of 1 expected, hand=%r" % (es.hand,)
+    assert not state.pending
+    assert legal_actions(state) == [EndPhase(player=E)]
+    print("  turmoil resolved: vp=%d leader=%s phase=%s hand=%d"
+          % (es.vp, es.leader, state.phase.name, len(es.hand)))
+
+
+def test_eyrie_turmoil_new_generation() -> None:
+    """新世代(7.7.3.I): 全君主が裏なら全て表に返してから選択。"""
+    rng = random.Random(11)
+    state = _setup_eyrie_pre_turmoil(
+        rng, used_leaders=("builder", "commander", "despot"))
+    state = apply(state, EyrieTurmoil(player=E), rng)
+    es = state.fs(E)
+    assert es.used_leaders == (), "all leaders must flip face-up (7.7.3.I)"
+    acts = legal_actions(state)
+    assert sorted(a.leader for a in acts) == [
+        "builder", "charismatic", "commander", "despot"]
+    print("  new generation: %d leaders selectable" % len(acts))
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
     print("selftest: ambush via pending stack")
     test_ambush_via_pending()
+    print("selftest: eyrie turmoil (7.7)")
+    test_eyrie_turmoil()
+    print("selftest: eyrie turmoil new generation (7.7.3.I)")
+    test_eyrie_turmoil_new_generation()
     print("OK")
     return 0
 

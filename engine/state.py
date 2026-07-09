@@ -141,6 +141,29 @@ class MarquiseState(FactionState):
 
 
 @dataclass(frozen=True)
+class EyrieState(FactionState):
+    """鷲巣王朝の派閥ボード状態(第7章)。
+
+    勅令(decree)は4列(募兵/移動/戦闘/建設, 7.5.2 の I〜IV 順)の
+    カードIDタプル。忠臣カード(7.3.4)は山札に存在しない擬似ID
+    ``LOYAL_VIZIER`` で表現する(動物種=鳥、捨て山に行かない)。
+    """
+
+    leader: Optional[str] = None            # 現在の君主(7.3.3 / 7.7.3)
+    used_leaders: Tuple[str, ...] = ()      # 裏向きの君主(7.7.3)。全裏で新世代(7.7.3.I)
+    #: 勅令4列(左から募兵→移動→戦闘→建設, 7.5.2)
+    decree: Tuple[Tuple[str, ...], ...] = ((), (), (), ())
+    # --- 昼光の勅令進行状態(ターンごとに decree からリセット) ---
+    #: 現在ターンの未実行勅令カード(列ごと)。先頭の非空列が現在の列。
+    decree_remaining: Tuple[Tuple[str, ...], ...] = ((), (), (), ())
+    decree_started: bool = False            # 実行開始後はクラフト不可(7.5.1)
+    #: 起動済みクラフトツール=止まり木の広場ID(1ターン1回, 4.1.1)
+    used_roost_clearings: Tuple[int, ...] = ()
+    built_roosts: int = 0                   # マップ上の止まり木数(0..7, 7.6.1)
+    despot_awarded: bool = False            # 独裁者VPの1戦闘1回制御(7.8.4)
+
+
+@dataclass(frozen=True)
 class DummyState(FactionState):
     """戦闘テスト用の「何もしない」スタブ派閥。"""
 
@@ -186,6 +209,11 @@ class GameState:
         assert isinstance(s, MarquiseState)
         return s
 
+    def eyrie(self) -> EyrieState:
+        s = self.fs(FactionId.EYRIE)
+        assert isinstance(s, EyrieState)
+        return s
+
     def clearing(self, cid: int) -> ClearingState:
         return self.clearings[cid]
 
@@ -194,6 +222,8 @@ class GameState:
         """広場の支配プレイヤー。兵士コマ+建物タイルの合計最大, 同点は None。
 
         放浪者コマ・トークンは不算入(2.5, 9.2.2)。
+        森の王者(7.2.2): 鷲巣王朝が同点1位に含まれる場合、その広場に
+        鷲巣の配置物(兵士コマ/建物タイル)があれば鷲巣が支配する。
         """
         cs = self.clearings[cid]
         counts: Dict[FactionId, int] = {}
@@ -207,6 +237,9 @@ class GameState:
         leaders = [f for f, c in counts.items() if c == best]
         if len(leaders) == 1:
             return leaders[0]
+        # 森の王者(7.2.2): counts に載っている=配置物が1個以上ある
+        if FactionId.EYRIE in leaders and counts.get(FactionId.EYRIE, 0) > 0:
+            return FactionId.EYRIE
         return None
 
     def controls(self, faction: FactionId, cid: int) -> bool:

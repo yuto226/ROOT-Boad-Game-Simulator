@@ -16,6 +16,10 @@ from .actions import (
     AmbushDefenderDecision,
     DiscardCard,
     DiscardDecision,
+    EyrieDecreeDecision,
+    EyrieLeaderDecision,
+    EyrieRoostDecision,
+    EyrieSetupCornerDecision,
     SetupChooseKeep,
     SetupKeepDecision,
 )
@@ -61,6 +65,26 @@ def _decision_options(state: GameState) -> List[Action]:
     if isinstance(dec, AllocateHitsDecision):
         # ヒット割り振り(4.3.4)
         return allocate_options(state, dec)
+
+    if isinstance(dec, EyrieSetupCornerDecision):
+        # 開始時広場の隅(7.3.2)
+        from .factions import eyrie
+        return eyrie.corner_options(state)
+
+    if isinstance(dec, EyrieLeaderDecision):
+        # 君主選択(7.3.3 / 7.7.3)
+        from .factions import eyrie
+        return eyrie.leader_options(state)
+
+    if isinstance(dec, EyrieDecreeDecision):
+        # 勅令追加(7.4.2)
+        from .factions import eyrie
+        return eyrie.decree_add_options(state, dec)
+
+    if isinstance(dec, EyrieRoostDecision):
+        # 止まり木確保(7.4.3)
+        from .factions import eyrie
+        return eyrie.roost_options(state)
 
     if isinstance(dec, DiscardDecision):
         # 手札を5枚へ(6.6)
