@@ -238,7 +238,7 @@ class VagabondState(FactionState):
 | VagabondMove(dst) | M1(+敵対兵士のいる広場へはM1追加) | 9.5.1。樹林へは移動不可。樹林からは隣接広場のみ。支配条件無視(9.2.3) |
 | VagabondBattle(defender) | S1 | 9.5.2。現在広場で戦闘 |
 | VagabondExplore | F1 | 9.5.3。現在広場の遺跡アイテム獲得+1VP。空になった遺跡は除去(ruin=False→枠が空く) |
-| VagabondAid(faction, card_id, take_item) | 任意1 | 9.5.4。現在広場一致の手札(鳥可)を相手の手札へ。相手の作成アイテム(fs.items)から1枚取得可(任意、Noneで取らない)。関係処理は 8.5 |
+| VagabondAid(faction, card_id, take_item) | 任意1 | 9.5.4。現在広場一致の手札(鳥可)を相手の手札へ。相手の作成アイテム(fs.items)があるなら1枚取得は**強制**(どれを取るかは選択。None は相手ボックスが空のときのみ)。関係処理は 8.5 |
 | VagabondQuest(quest_id, reward) | クエスト記載の2枚 | 9.5.5。reward="vp"(同種解決数ぶん) or "cards"(2ドロー)。解決後、山から1枚補充 |
 | VagabondStrike(target) | C1 | 9.5.6。現在広場の兵士1個、または兵士のいないプレイヤーの建物/トークン1個を除去 |
 | VagabondRepair(kind) | H1 | 9.5.7。損傷1枚をかばんへ(裏表維持。表のT/X/Bは枠が空けば配置枠へ) |

@@ -9,6 +9,8 @@ from .actions import (
     EyrieLeaderDecision,
     EyrieSetupCornerDecision,
     SetupKeepDecision,
+    VagabondSetupCharacterDecision,
+    VagabondSetupForestDecision,
 )
 from .apply import apply
 from .board import load_board_defs, load_map
@@ -22,6 +24,7 @@ from .state import (
     FactionState,
     GameState,
     MarquiseState,
+    VagabondState,
 )
 from .types import FactionId, ItemKind, Phase
 
@@ -47,6 +50,9 @@ def _initial_faction_state(faction: FactionId) -> FactionState:
     if faction == FactionId.ALLIANCE:
         # 8.3.1: 兵士10(拠点3・支持トークン10は state 側で管理)
         return AllianceState(faction=faction, soldiers_supply=10)
+    if faction == FactionId.VAGABOND:
+        # 9.3: 兵士なし(放浪者コマのみ)。キャラ・樹林はセットアップ Decision
+        return VagabondState(faction=faction, soldiers_supply=0)
     if faction == FactionId.DUMMY:
         return DummyState(faction=faction, soldiers_supply=10)
     raise NotImplementedError("faction %s not implemented in phase 1" % faction.value)
@@ -104,10 +110,40 @@ def new_game(factions: Tuple[FactionId, ...], rng: random.Random) -> GameState:
         elif f == FactionId.ALLIANCE:
             # 8.3.4 支援者獲得: 山札トップ3枚を支援者ボックスへ(選択なし=Decision不要)
             state = _setup_alliance_supporters(state, rng)
+        elif f == FactionId.VAGABOND:
+            # 9.3.3 クエスト山 / 9.3.4 遺跡アイテム / 9.3.6 関係マーカー(選択なし)
+            state = _setup_vagabond(state, rng)
+            # 9.3.1 キャラ選択 → 9.3.2 樹林選択(開始時アイテム 9.3.5 は適用側)
+            decisions.append(VagabondSetupCharacterDecision(actor=f))
+            decisions.append(VagabondSetupForestDecision(actor=f))
         # DUMMY はセットアップ選択なし
     if decisions:
         state = state.push_pending(*decisions)
     return state
+
+
+def _setup_vagabond(state: GameState, rng: random.Random) -> GameState:
+    """放浪部族の選択なしセットアップ(9.3.3 / 9.3.4 / 9.3.6)。
+
+    - クエスト15枚をシャッフルして山を作り、上から3枚を公開する(9.3.3)。
+    - 遺跡アイテム4種(boards.json ``ruin_items``)を4遺跡広場へランダムに
+      割り当てる(9.3.4。隠匿情報として VagabondState.ruin_items に保持)。
+    - 参加中の他派閥すべての関係マーカーを無関心(0)に置く(9.3.6)。
+    """
+    from .factions.vagabond import quest_ids
+    vs = state.vagabond()
+    qids = quest_ids()
+    rng.shuffle(qids)
+    open3 = tuple(qids.pop() for _ in range(3))  # 末尾=山の上(2.1 と同規約)
+    ruin_cids = [c.id for c in state.map.clearings if c.ruin]
+    kinds = list(state.board_defs["vagabond"]["ruin_items"])
+    rng.shuffle(kinds)
+    ruins = tuple(zip(ruin_cids, kinds))
+    rels = tuple((f, 0) for f in state.factions if f != FactionId.VAGABOND)
+    import dataclasses as _dc
+    vs = _dc.replace(vs, quest_deck=tuple(qids), quests_open=open3,
+                     ruin_items=ruins, relationships=rels)
+    return state.with_faction_state(vs)
 
 
 def _setup_alliance_supporters(state: GameState, rng: random.Random,

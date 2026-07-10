@@ -45,12 +45,28 @@ from .actions import (
     MarquiseMarch,
     MarquisePlayBirdCard,
     MarquiseRecruit,
+    ItemDamageDecision,
+    ItemLimitDecision,
     OutragePay,
+    RefreshDecision,
     SetupChooseKeep,
+    VagabondAid,
+    VagabondBattle,
+    VagabondChooseCharacter,
+    VagabondChooseForest,
+    VagabondExplore,
+    VagabondItemChoice,
+    VagabondMove,
+    VagabondQuest,
+    VagabondRepair,
+    VagabondSlip,
+    VagabondSpecial,
+    VagabondStrike,
 )
 from .crafting import apply_craft
 from .factions import alliance as alliance_mod
 from .factions import eyrie as eyrie_mod
+from .factions import vagabond as vagabond_mod
 from .mechanics import discard_card
 from .state import GameState, MarquiseState
 from .types import (
@@ -276,7 +292,23 @@ def _apply_discard(state: GameState, action: DiscardCard, rng) -> GameState:
 
 
 def _apply_craft(state: GameState, action: CraftCard, rng) -> GameState:
+    # 放浪部族(9.5.8)はHの exhaust を伴う専用処理(factions/vagabond.py)
+    if action.player == FactionId.VAGABOND:
+        return vagabond_mod.apply_craft_vagabond(state, action, rng)
     return apply_craft(state, action, rng)
+
+
+def _apply_vagabond_item_choice(state: GameState, action: VagabondItemChoice,
+                                rng) -> GameState:
+    """アイテム選択(回復 9.4.1 / 損傷 9.2.7 / 上限除外 9.6.4)のディスパッチ。"""
+    dec = state.pending[-1]
+    if isinstance(dec, RefreshDecision):
+        return vagabond_mod.apply_refresh_choice(state, action, rng)
+    if isinstance(dec, ItemDamageDecision):
+        return vagabond_mod.apply_damage_choice(state, action, rng)
+    if isinstance(dec, ItemLimitDecision):
+        return vagabond_mod.apply_limit_choice(state, action, rng)
+    raise AssertionError("VagabondItemChoice without item decision")
 
 
 _HANDLERS = {
@@ -315,4 +347,17 @@ _HANDLERS = {
     AllianceEndOps: alliance_mod.apply_end_ops,
     OutragePay: alliance_mod.apply_outrage_pay,
     AllianceDiscardSupporter: alliance_mod.apply_discard_supporter,
+    # 放浪部族(第9章)。本体は factions/vagabond.py
+    VagabondChooseCharacter: vagabond_mod.apply_choose_character,
+    VagabondChooseForest: vagabond_mod.apply_choose_forest,
+    VagabondSlip: vagabond_mod.apply_slip,
+    VagabondMove: vagabond_mod.apply_move,
+    VagabondBattle: vagabond_mod.apply_battle,
+    VagabondExplore: vagabond_mod.apply_explore,
+    VagabondAid: vagabond_mod.apply_aid,
+    VagabondQuest: vagabond_mod.apply_quest,
+    VagabondStrike: vagabond_mod.apply_strike,
+    VagabondRepair: vagabond_mod.apply_repair,
+    VagabondSpecial: vagabond_mod.apply_special,
+    VagabondItemChoice: _apply_vagabond_item_choice,
 }

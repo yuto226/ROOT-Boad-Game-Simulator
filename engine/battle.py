@@ -21,6 +21,7 @@ from .actions import (
     AmbushDefenderDecision,
     BattleCtx,
     DeclareBattle,
+    ItemDamageDecision,
 )
 from .state import GameState
 from .types import (
@@ -41,6 +42,26 @@ def _eyrie_leader(state: GameState) -> Optional[str]:
     if FactionId.EYRIE not in state.factions:
         return None
     return state.eyrie().leader
+
+
+def _is_vagabond(state: GameState, faction: FactionId) -> bool:
+    """放浪部族の読み替えフック(9.2.4/9.2.6/9.2.7)の作動条件。
+
+    放浪部族参戦時のみ True(既存3派閥の挙動を変えない, DESIGN.md 8.4)。
+    """
+    return faction == FactionId.VAGABOND and FactionId.VAGABOND in state.factions
+
+
+def _vagabond_swords(state: GameState) -> int:
+    """非損傷Sの枚数(出目上限 9.2.6・無防備判定 9.2.4)。"""
+    from .factions.vagabond import _nondamaged_sword
+    return _nondamaged_sword(state.vagabond().items)
+
+
+def _vagabond_can_take_hits(state: GameState) -> bool:
+    """継続判定(9.2.7): 非損傷アイテムが残っているか。"""
+    from .factions.vagabond import _has_nondamaged
+    return _has_nondamaged(state.vagabond().items)
 
 
 # ---------------- 除去(3.5) ----------------
@@ -90,9 +111,25 @@ def _return_token_to_supply(state: GameState, victim: FactionId, kind: str) -> G
     return state
 
 
+def _vagabond_relation_hook(state: GameState, victim: FactionId,
+                            source: Optional[FactionId], is_soldier: bool,
+                            battle: bool) -> GameState:
+    """放浪部族が除去者のときの敵対化(9.2.9.III)・悪名(III.a)フック。"""
+    if (source == FactionId.VAGABOND and FactionId.VAGABOND in state.factions
+            and victim != FactionId.VAGABOND):
+        from .factions.vagabond import on_vagabond_removes
+        state = on_vagabond_removes(state, victim, is_soldier, battle)
+    return state
+
+
 def remove_piece(state: GameState, clearing: int, victim: FactionId,
-                 target: Tuple, source: Optional[FactionId]) -> GameState:
-    """戦場から victim の配置物1つを除去(4.3.4)。source に建物/トークンVP付与。"""
+                 target: Tuple, source: Optional[FactionId],
+                 battle: bool = True) -> GameState:
+    """戦場から victim の配置物1つを除去(4.3.4)。source に建物/トークンVP付与。
+
+    ``battle=False`` は戦闘によらない除去(放浪部族の狙撃 9.5.6 等)。
+    悪名(9.2.9.III.a)は戦闘除去のみが対象になる。
+    """
     cs = state.clearing(clearing)
     kind = target[0]
     if kind == "soldier":
@@ -101,6 +138,7 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         fs = state.fs(victim)
         state = state.with_faction_state(
             dataclasses.replace(fs, soldiers_supply=fs.soldiers_supply + 1))
+        state = _vagabond_relation_hook(state, victim, source, True, battle)
         return state
     if kind == "building":
         piece = Piece(victim, target[1])
@@ -110,6 +148,7 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
             state = _maybe_despot_vp(state, source)  # 7.8.4
+        state = _vagabond_relation_hook(state, victim, source, False, battle)
         # 森林連合の拠点タイル除去の連鎖処理(8.2.4)
         if victim == FactionId.ALLIANCE and target[1] == B_BASE:
             from .factions import alliance as alliance_mod
@@ -122,6 +161,7 @@ def remove_piece(state: GameState, clearing: int, victim: FactionId,
         if source is not None:
             state = _award_vp(state, source, 1)  # 3.2.1
             state = _maybe_despot_vp(state, source)  # 7.8.4
+        state = _vagabond_relation_hook(state, victim, source, False, battle)
         # 支持トークン除去 → 支持数の減算 + 蜂起(8.2.6)
         if victim == FactionId.ALLIANCE and target[1] == T_SYMPATHY:
             from .factions import alliance as alliance_mod
@@ -162,18 +202,35 @@ def _auto_remove(state: GameState, clearing: int, victim: FactionId,
 
 
 # ---------------- ダイスとヒット割り振り ----------------
+def _hits_decision(state: GameState, ctx: BattleCtx, victim: FactionId,
+                   source: FactionId, hits: int):
+    """受け手ごとのヒット適用デシジョン(4.3.4)。
+
+    受け手が放浪部族なら AllocateHitsDecision の代わりにアイテム損傷
+    (ItemDamageDecision, 9.2.7)を積む。
+    """
+    if _is_vagabond(state, victim):
+        return ItemDamageDecision(actor=victim, remaining=hits)
+    return AllocateHitsDecision(
+        actor=victim, victim=victim, hits=hits,
+        source=source, clearing=ctx.clearing)
+
+
+def _can_take_hits(state: GameState, ctx: BattleCtx, faction: FactionId) -> bool:
+    """ヒットを適用できる配置物(放浪部族は非損傷アイテム, 9.2.7)が残るか。"""
+    if _is_vagabond(state, faction):
+        return _vagabond_can_take_hits(state)
+    return _has_pieces(state, ctx.clearing, faction)
+
+
 def _push_allocations(state: GameState, ctx: BattleCtx,
                       atk_hits: int, def_hits: int) -> GameState:
     """両者のヒット割り振りデシジョンを積む(4.3.4)。"""
     decisions = []
-    if atk_hits > 0 and _has_pieces(state, ctx.clearing, ctx.defender):
-        decisions.append(AllocateHitsDecision(
-            actor=ctx.defender, victim=ctx.defender, hits=atk_hits,
-            source=ctx.attacker, clearing=ctx.clearing))
-    if def_hits > 0 and _has_pieces(state, ctx.clearing, ctx.attacker):
-        decisions.append(AllocateHitsDecision(
-            actor=ctx.attacker, victim=ctx.attacker, hits=def_hits,
-            source=ctx.defender, clearing=ctx.clearing))
+    if atk_hits > 0 and _can_take_hits(state, ctx, ctx.defender):
+        decisions.append(_hits_decision(state, ctx, ctx.defender, ctx.attacker, atk_hits))
+    if def_hits > 0 and _can_take_hits(state, ctx, ctx.attacker):
+        decisions.append(_hits_decision(state, ctx, ctx.attacker, ctx.defender, def_hits))
     if not decisions:
         return state
     return state.push_pending(*decisions)
@@ -185,21 +242,36 @@ def _roll_and_allocate(state: GameState, ctx: BattleCtx, rng) -> GameState:
     d1 = rng.randint(1, 6)
     d2 = rng.randint(1, 6)
     hi, lo = max(d1, d2), min(d1, d2)
-    atk_sol = cs.soldier_count(ctx.attacker)
-    def_sol = cs.soldier_count(ctx.defender)
+    # 出目上限の基準(4.3.2.I: 戦場の自兵士数)。放浪部族は非損傷Sの枚数
+    # (9.2.6)に読み替える(攻守どちら側でも適用)。
+    if _is_vagabond(state, ctx.attacker):
+        atk_sol = _vagabond_swords(state)
+    else:
+        atk_sol = cs.soldier_count(ctx.attacker)
+    if _is_vagabond(state, ctx.defender):
+        def_sol = _vagabond_swords(state)
+    else:
+        def_sol = cs.soldier_count(ctx.defender)
     # 通常(4.3.2): 攻撃側=大きい方、防御側=小さい方。
     # ゲリラ戦(8.2.2): 防御側が森林連合なら攻守のダイス割当を反転する。
     if ctx.defender == FactionId.ALLIANCE:
         atk_roll, def_roll = lo, hi
     else:
         atk_roll, def_roll = hi, lo
-    # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)
+    # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)。
+    # 防御側が放浪部族なら無防備判定は「非損傷Sを1枚も所有していない」(9.2.4)。
+    # 放浪部族の def_sol は非損傷S数なので判定式は共通の def_sol == 0 でよい。
     atk_hits = min(atk_roll, atk_sol) + (1 if def_sol == 0 else 0)
     def_hits = min(def_roll, def_sol)
     # 司令官(7.8.3): 鷲巣が攻撃側なら追加1ヒット(4.3.3.I, 出目上限の対象外)
     if ctx.attacker == FactionId.EYRIE and _eyrie_leader(state) == "commander":
         atk_hits += 1
     return _push_allocations(state, ctx, atk_hits, def_hits)
+
+
+def roll_battle(state: GameState, ctx: BattleCtx, rng) -> GameState:
+    """ロール以降を実行する公開エントリ(奇襲損傷の後続 4.3.1.II 用)。"""
+    return _roll_and_allocate(state, ctx, rng)
 
 
 # ---------------- エントリポイント(apply から呼ぶ) ----------------
@@ -262,10 +334,18 @@ def _apply_ambush_hits(state: GameState, ctx: BattleCtx, rng) -> GameState:
 
     終了判定は「攻撃側のコマ(=兵士等の立体物, G.1.17)がすべて除去」
     であり、建物タイル・トークンは含めない(建物が残っていても終了)。
-    TODO(放浪部族): 放浪者コマもコマとして数える(9.2.2)。
     ※簡略化: 2ヒットの除去対象は兵士優先の自動選択(本来は 4.3.4 と
     同様に受け手が選択する。兵士のみなら結果は同一)。
+
+    攻撃側が放浪部族なら2ヒット=アイテム2損傷(9.2.7、選択は Decision)。
+    放浪者コマは除去されない(9.2.2)ため「全滅で戦闘終了」は発生せず、
+    損傷解決後にロールへ継続する(roll_after=True)。
     """
+    if _is_vagabond(state, ctx.attacker):
+        if _vagabond_can_take_hits(state):
+            return state.push_pending(ItemDamageDecision(
+                actor=ctx.attacker, remaining=2, ctx=ctx, roll_after=True))
+        return _roll_and_allocate(state, ctx, rng)  # 損傷可能なアイテムなし → 無視
     state = _auto_remove(state, ctx.clearing, ctx.attacker, ctx.defender, 2)
     if state.clearing(ctx.clearing).soldier_count(ctx.attacker) == 0:
         return state  # 攻撃側のコマ全滅 → 戦闘終了(4.3.1.II)

@@ -20,10 +20,15 @@ from .actions import (
     EyrieLeaderDecision,
     EyrieRoostDecision,
     EyrieSetupCornerDecision,
+    ItemDamageDecision,
+    ItemLimitDecision,
     OutrageDecision,
+    RefreshDecision,
     SetupChooseKeep,
     SetupKeepDecision,
     SupportersLimitDecision,
+    VagabondSetupCharacterDecision,
+    VagabondSetupForestDecision,
 )
 from .battle import _matching_ambush, allocate_options
 from .state import GameState
@@ -97,6 +102,31 @@ def _decision_options(state: GameState) -> List[Action]:
         # 全拠点喪失時の支援者5枚調整(8.2.4)
         from .factions import alliance
         return alliance.supporters_limit_options(state, dec)
+
+    if isinstance(dec, VagabondSetupCharacterDecision):
+        # キャラクター選択(9.3.1)
+        from .factions import vagabond
+        return vagabond.character_options(state)
+
+    if isinstance(dec, VagabondSetupForestDecision):
+        # 開始樹林の選択(9.3.2)
+        from .factions import vagabond
+        return vagabond.forest_options(state)
+
+    if isinstance(dec, RefreshDecision):
+        # 鳥歌の回復(9.4.1)
+        from .factions import vagabond
+        return vagabond.refresh_options(state, dec)
+
+    if isinstance(dec, ItemDamageDecision):
+        # 受けヒットのアイテム損傷(9.2.7 / 9.2.2.I)
+        from .factions import vagabond
+        return vagabond.damage_options(state, dec)
+
+    if isinstance(dec, ItemLimitDecision):
+        # 夕闇のアイテム上限調整(9.6.4)
+        from .factions import vagabond
+        return vagabond.limit_options(state, dec)
 
     if isinstance(dec, DiscardDecision):
         # 手札を5枚へ(6.6)

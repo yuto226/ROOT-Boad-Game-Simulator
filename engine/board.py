@@ -29,9 +29,14 @@ class Clearing:
 
 @dataclass(frozen=True)
 class Forest:
-    """樹林(2.4)。フェーズ1では放浪部族未実装のため接続のみ保持。"""
+    """樹林(2.4)。放浪者コマ専用の位置(9.3.2 / 8.6)。
+
+    ``adjacent_clearings`` はこの樹林に接する広場ID、``adjacent_forests`` は
+    経路1本を挟んで接する樹林ID(map_autumn.json の forests 由来)。
+    """
 
     id: int
+    adjacent_clearings: Tuple[int, ...] = ()
     adjacent_forests: Tuple[int, ...] = ()
 
 
@@ -58,6 +63,13 @@ class MapData:
                 return c.id
         return None
 
+    def forest(self, fid: int) -> Forest:
+        return self.forests[fid]
+
+    def forests_adjacent_to_clearing(self, cid: int) -> Tuple[int, ...]:
+        """広場 cid に接する樹林ID一覧(放浪部族の潜入 9.4.2 で使用)。"""
+        return tuple(f.id for f in self.forests if cid in f.adjacent_clearings)
+
 
 def load_map(path: Optional[str] = None) -> MapData:
     """map_autumn.json をロードして :class:`MapData` を返す。"""
@@ -77,7 +89,11 @@ def load_map(path: Optional[str] = None) -> MapData:
         for c in raw["clearings"]
     )
     forests = tuple(
-        Forest(id=f["id"], adjacent_forests=tuple(f.get("adjacent_forests", ())))
+        Forest(
+            id=f["id"],
+            adjacent_clearings=tuple(f.get("adjacent_clearings", ())),
+            adjacent_forests=tuple(f.get("adjacent_forests", ())),
+        )
         for f in raw.get("forests", [])
     )
     return MapData(clearings=clearings, forests=forests, verified=raw.get("_verified", False))

@@ -26,23 +26,33 @@ from .actions import (
     EyrieChooseCorner,
     EyrieChooseLeader,
     EyrieTurmoil,
+    ItemDamageDecision,
+    ItemLimitDecision,
     MarquiseMarch,
     OutrageDecision,
     OutragePay,
     SetupChooseKeep,
     SupportersLimitDecision,
+    VagabondAid,
+    VagabondBattle,
+    VagabondChooseCharacter,
+    VagabondChooseForest,
+    VagabondExplore,
+    VagabondQuest,
+    VagabondStrike,
 )
 from .apply import apply
 from .battle import remove_piece
 from .game import new_game
 from .legal import legal_actions
-from .state import GameState
+from .state import GameState, ItemTile
 from .types import (
     B_BASE,
     B_ROOST,
     B_SAWMILL,
     Corner,
     FactionId,
+    ItemKind,
     LOYAL_VIZIER,
     Phase,
     Piece,
@@ -54,6 +64,7 @@ M = FactionId.MARQUISE
 D = FactionId.DUMMY
 E = FactionId.EYRIE
 A = FactionId.ALLIANCE
+V = FactionId.VAGABOND
 
 
 def _setup_two_faction(rng: random.Random) -> GameState:
@@ -458,6 +469,316 @@ def test_guerrilla_dice() -> None:
     print("  guerrilla: hits victim A=%d, victim M=%d" % (decs[A], decs[M]))
 
 
+# ---------------- 放浪部族(第9章, DESIGN.md 8.8) ----------------
+def _tile(kind: str, exhausted: bool = False, damaged: bool = False,
+          on_track: bool = False) -> ItemTile:
+    """テスト用 ItemTile(既定=表向き・非損傷・かばんエリア)。"""
+    return ItemTile(kind=kind, exhausted=exhausted, damaged=damaged, on_track=on_track)
+
+
+def _set_vagabond(state: GameState, **kw) -> GameState:
+    return state.with_faction_state(dataclasses.replace(state.vagabond(), **kw))
+
+
+def _rel(state: GameState, faction: FactionId) -> int:
+    from .factions.vagabond import _rel_get
+    return _rel_get(state.vagabond(), faction)
+
+
+def _setup_marquise_vagabond(rng: random.Random,
+                             character: str = "thief") -> GameState:
+    """猫(城砦NW)+放浪部族(樹林0)の2派閥。部族の昼光フェイズに設定する。"""
+    state = new_game((M, V), rng)
+    state = apply(state, SetupChooseKeep(player=M, corner="NW"), rng)
+    state = apply(state, VagabondChooseCharacter(player=V, character=character), rng)
+    state = apply(state, VagabondChooseForest(player=V, forest=0), rng)
+    assert not state.pending
+    return state.replace(turn_index=state.factions.index(V), phase=Phase.DAYLIGHT)
+
+
+def test_vagabond_explore() -> None:
+    """探索(9.5.3): 遺跡アイテム獲得+1VP、遺跡枯渇での除去(建物枠の解放)。"""
+    rng = random.Random(21)
+    state = _setup_marquise_vagabond(rng)
+    cid, hidden_kind = state.vagabond().ruin_items[0]
+    slots_before = state.clearing(cid).occupied_slots()
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=cid,
+                          items=(_tile("torch"),), hand=())
+    vp0 = state.vagabond().vp
+
+    acts = legal_actions(state)
+    exp = [a for a in acts if isinstance(a, VagabondExplore)]
+    assert exp, "explore should be legal on a ruin clearing with a torch"
+    state = apply(state, exp[0], rng)
+
+    vs = state.vagabond()
+    assert vs.vp == vp0 + 1, "1VP for the ruin item (9.5.3)"
+    assert any(t.kind == hidden_kind and not t.damaged for t in vs.items), (
+        "hidden item gained face up")
+    assert next(t for t in vs.items if t.kind == "torch").exhausted, "F exhausted"
+    assert not any(c == cid for c, _ in vs.ruin_items), "hidden item removed"
+    assert not state.clearing(cid).ruin, "depleted ruin tile removed (9.5.3)"
+    assert state.clearing(cid).occupied_slots() == slots_before - 1, "slot freed"
+    print("  explore: got %s at clearing %d, vp=%d, ruin removed"
+          % (hidden_kind, cid, vs.vp))
+
+
+def test_vagabond_aid_relationship() -> None:
+    """援助と関係強化(9.5.4 / 9.2.9.I/II.a): 1回→+1VP→2回→+2VP→3回→同盟
+    (+2VP)、同盟後の援助+2VP、アイテム取得(相手の fs.items から移動)。"""
+    rng = random.Random(22)
+    state = _setup_marquise_vagabond(rng)
+    c = 3  # mouse
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 1))
+    cards = _cards_of_suit(state, Suit.MOUSE, 7)
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c,
+                          hand=tuple(cards),
+                          items=tuple(_tile("boots") for _ in range(7)))
+    mfs = state.fs(M)
+    state = state.with_faction_state(dataclasses.replace(
+        mfs, items=(ItemKind.TEA,), hand=()))
+    vp0 = state.vagabond().vp
+
+    # 援助アクションが合法手に出る。相手ボックスにアイテムがあるなら
+    # 取得は強制(9.5.4)なので take_item=None は出ない
+    acts = legal_actions(state)
+    aids = [a for a in acts if isinstance(a, VagabondAid)]
+    assert any(a.take_item == "tea" for a in aids), "take_item option expected"
+    assert not any(a.take_item is None for a in aids), \
+        "no-take must be illegal while target has items (9.5.4)"
+
+    # 1回目(コスト1): 無関心→マス1で+1VP。アイテム取得も行う
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[0],
+                                     take_item="tea"), rng)
+    vs = state.vagabond()
+    assert _rel(state, M) == 1 and vs.vp == vp0 + 1, "advance to 1: +1VP"
+    assert ItemKind.TEA not in state.fs(M).items, "tea moved out of marquise box"
+    assert any(t.kind == "tea" for t in vs.items), "tea gained by vagabond"
+    assert cards[0] in state.fs(M).hand, "aid card given to marquise"
+
+    # 2回で次のマスへ(コスト2): 1回目はVPなし、2回目で+2VP
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[1]), rng)
+    assert _rel(state, M) == 1 and state.vagabond().vp == vp0 + 1, "1/2: no VP yet"
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[2]), rng)
+    assert _rel(state, M) == 2 and state.vagabond().vp == vp0 + 3, "advance to 2: +2VP"
+
+    # 3回で同盟へ(コスト3): +2VP
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[3]), rng)
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[4]), rng)
+    assert state.vagabond().vp == vp0 + 3, "2/3: no VP yet"
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[5]), rng)
+    assert _rel(state, M) == 3 and state.vagabond().vp == vp0 + 5, "allied: +2VP"
+
+    # 同盟後の援助: 毎回+2VP(9.2.9.II.a)
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[6]), rng)
+    assert _rel(state, M) == 3 and state.vagabond().vp == vp0 + 7, "allied aid: +2VP"
+    print("  aid: relationship 0->3 (allied), vp +%d, item taken"
+          % (state.vagabond().vp - vp0))
+
+
+def test_vagabond_hostility_infamy() -> None:
+    """敵対化と悪名(9.2.9.III/III.a): 戦闘で非敵対派閥の兵士除去→即敵対
+    (トリガー除去はVPなし)、同一戦闘の後続除去で+1VP、狙撃では悪名なし。"""
+    seed = random.Random(23)
+    state = _setup_marquise_vagabond(seed)
+    c = 3
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 2))
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c, hand=(),
+                          items=(_tile("sword"), _tile("sword"), _tile("boots")))
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=()))
+    vp0 = state.vagabond().vp
+
+    rng = ScriptedRng([3, 1])  # atk_roll=3, def_roll=1
+    state = apply(state, VagabondBattle(player=V, defender=M), rng)
+    # 出目上限=非損傷S 2枚(使用済みでも数える, 9.2.6) → 攻撃2ヒット
+    dec = state.pending[-1]
+    assert isinstance(dec, AllocateHitsDecision) and dec.victim == M and dec.hits == 2
+
+    # 1体目の除去: 敵対化のトリガー(その除去自体は悪名VPなし)
+    state = apply(state, legal_actions(state)[0], rng)
+    assert _rel(state, M) == -1, "immediate hostility (9.2.9.III)"
+    assert state.vagabond().vp == vp0, "trigger removal itself gives no VP"
+    # 2体目の除去: 既に敵対 → 悪名+1VP(9.2.9.III.a)
+    state = apply(state, legal_actions(state)[0], rng)
+    assert state.vagabond().vp == vp0 + 1, "infamy +1VP for subsequent removal"
+    # 部族の受け1ヒット: アイテム損傷(9.2.7)
+    dec = state.pending[-1]
+    assert isinstance(dec, ItemDamageDecision) and dec.remaining == 1
+    state = apply(state, legal_actions(state)[0], rng)
+    assert not state.pending
+    assert sum(1 for t in state.vagabond().items if t.damaged) == 1
+
+    # 狙撃(9.5.6)は戦闘ではない → 悪名なし(兵士除去のVPもなし)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 1))
+    vs = state.vagabond()
+    state = _set_vagabond(state, items=vs.items + (_tile("crossbow"),))
+    vp1 = state.vagabond().vp
+    state = apply(state, VagabondStrike(player=V, faction=M, target=("soldier",)), rng)
+    assert state.clearing(c).soldier_count(M) == 0
+    assert state.vagabond().vp == vp1, "strike is not battle: no infamy VP"
+    print("  hostility/infamy: rel=-1, battle vp +1, strike vp +0")
+
+
+def test_vagabond_battle_readings() -> None:
+    """戦闘読み替え(9.2.4/9.2.6/9.2.7): 出目上限=非損傷S数、非損傷Sなしでの
+    無防備+1、受けヒットのアイテム損傷、非損傷が尽きたら超過ヒット無視。"""
+    # (a) 出目上限: 出目6でも非損傷S2枚 → 2ヒット
+    seed = random.Random(24)
+    state = _setup_marquise_vagabond(seed)
+    c = 3
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 5))
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c, hand=(),
+                          items=(_tile("sword"), _tile("sword"), _tile("boots")))
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=()))
+    rng = ScriptedRng([6, 1])
+    state = apply(state, VagabondBattle(player=V, defender=M), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, AllocateHitsDecision) and dec.hits == 2, (
+        "roll 6 capped at 2 non-damaged swords (9.2.6): %r" % (dec,))
+    while state.pending:
+        state = apply(state, legal_actions(state)[0], rng)
+
+    # (b) 無防備+超過ヒット無視: 非損傷Sなしの部族を猫が攻撃
+    seed = random.Random(25)
+    state = _setup_marquise_vagabond(seed)
+    c = 3
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 3))
+    # 非損傷S=0(損傷した剣のみ)、非損傷は boots+torch の2枚だけ
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c, hand=(),
+                          items=(_tile("sword", damaged=True), _tile("boots"),
+                                 _tile("torch")))
+    ms = state.fs(M)
+    state = state.with_faction_state(dataclasses.replace(ms, hand=()))
+    # 猫の昼光にして、部族への戦闘宣言が合法手に出ることも確認(9.2.2)
+    state2 = state.replace(turn_index=state.factions.index(M), phase=Phase.DAYLIGHT)
+    state2 = state2.with_faction_state(dataclasses.replace(
+        state2.marquise(), actions_left=3))
+    assert DeclareBattle(player=M, clearing=c, defender=V) in legal_actions(state2), (
+        "marquise can battle the vagabond pawn")
+
+    rng = ScriptedRng([2, 2])
+    state = apply(state, DeclareBattle(player=M, clearing=c, defender=V), rng)
+    # 攻撃 min(2,3)=2 + 無防備1(9.2.4) = 3ヒット。防御は非損傷S0 → 0ヒット
+    dec = state.pending[-1]
+    assert isinstance(dec, ItemDamageDecision) and dec.remaining == 3, (
+        "defenseless +1: 3 hits as item damage: %r" % (dec,))
+    state = apply(state, legal_actions(state)[0], rng)
+    state = apply(state, legal_actions(state)[0], rng)
+    # 非損傷が尽きた → 3ヒット目は無視され pending は空(9.2.7)
+    assert not state.pending, "excess hits ignored when no non-damaged items"
+    vs = state.vagabond()
+    assert all(t.damaged for t in vs.items), "all 3 tiles damaged"
+    print("  battle readings: cap=2 (roll 6), defenseless 3 hits, excess ignored")
+
+
+def test_vagabond_revolt_damage() -> None:
+    """反乱 vs 放浪者コマ(9.2.2.I): コマ残存+アイテム3損傷。"""
+    rng = random.Random(26)
+    state = new_game((M, A, V), rng)
+    state = apply(state, SetupChooseKeep(player=M, corner="NW"), rng)
+    state = apply(state, VagabondChooseCharacter(player=V, character="ranger"), rng)
+    state = apply(state, VagabondChooseForest(player=V, forest=0), rng)
+    assert not state.pending
+
+    fox_cids = _clearings_of_suit(state, Suit.FOX)
+    c = next(cid for cid in fox_cids if not state.clearing(cid).ruin)
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_token(Piece(A, T_SYMPATHY)))
+    supp = tuple(_cards_of_suit(state, Suit.FOX, 2))
+    state = state.with_faction_state(dataclasses.replace(
+        state.alliance(), placed_sympathy=1, supporters=supp))
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c,
+                          items=tuple(_tile(k) for k in
+                                      ("boots", "sword", "torch", "hammer")))
+
+    state = apply(state, AllianceRevolt(player=A, clearing=c), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, ItemDamageDecision) and dec.remaining == 3, (
+        "revolt vs pawn: 3 item damage (9.2.2.I): %r" % (dec,))
+    for _ in range(3):
+        state = apply(state, legal_actions(state)[0], rng)
+    assert not state.pending
+    vs = state.vagabond()
+    assert vs.pawn_clearing == c, "pawn never removed from the map (9.2.2)"
+    assert sum(1 for t in vs.items if t.damaged) == 3
+    print("  revolt vs pawn: pawn stays at %d, 3 tiles damaged" % c)
+
+
+def test_vagabond_evening() -> None:
+    """夕闇(9.6): 樹林での全回復、ドロー1+表X、上限6+2B超過時のゲーム除外。"""
+    rng = random.Random(27)
+    state = _setup_marquise_vagabond(rng)
+    items = (
+        _tile("sword", damaged=True),                 # 夜の休息で回復
+        _tile("torch", exhausted=True, damaged=True),  # 〃(表に返る 9.6.1)
+        _tile("coins", on_track=True),                 # ドロー+1(9.6.2)
+        _tile("bag", on_track=True),                   # 上限+2(9.6.4)
+    ) + tuple(_tile("boots") for _ in range(8))
+    state = _set_vagabond(state, pawn_forest=0, pawn_clearing=None,
+                          items=items, hand=())
+    # 夕闇へ(昼光の EndPhase → begin_phase)
+    state = apply(state, EndPhase(player=V), rng)
+    assert state.phase == Phase.EVENING
+    vs = state.vagabond()
+    assert not any(t.damaged for t in vs.items), "forest rest repairs all (9.6.1)"
+    assert not any(t.exhausted for t in vs.items), "repaired tiles turn face up"
+    assert len(vs.hand) == 2, "draw 1 + 1 face-up coins (9.6.2): %d" % len(vs.hand)
+    # 上限 = 6 + 2×表B(配置枠) = 8。かばん+損傷 = 10(sword,torch,boots×8)
+    dec = state.pending[-1]
+    assert isinstance(dec, ItemLimitDecision), "over item limit (9.6.4)"
+    n_before = len(state.vagabond().items)
+    steps = 0
+    while state.pending:
+        steps += 1
+        assert steps < 10
+        state = apply(state, legal_actions(state)[0], rng)
+    vs = state.vagabond()
+    assert len(vs.items) == n_before - 2, "2 tiles removed from the game"
+    held = sum(1 for t in vs.items if not t.on_track)
+    assert held == 8, "held items reduced to limit: %d" % held
+    print("  evening: repaired all, drew 2, removed 2 tiles (limit 8)")
+
+
+def test_vagabond_quest() -> None:
+    """クエスト(9.5.5): 2アイテム消費、同種2枚目=2VP、補充で公開3枚に戻る。"""
+    rng = random.Random(28)
+    state = _setup_marquise_vagabond(rng)
+    from .factions.vagabond import quest_ids
+    all_q = quest_ids()
+    open3 = ("errand-fox", "escort", "expel-bandits-rabbit")
+    done = ("fundraising",)  # fox の解決済み1枚 → errand-fox 解決で同種2枚目
+    deck = tuple(q for q in all_q if q not in open3 + done)
+    c = _clearings_of_suit(state, Suit.FOX)[0]
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c, hand=(),
+                          quests_open=open3, quest_deck=deck, quests_done=done,
+                          items=(_tile("tea", on_track=True), _tile("boots"),
+                                 _tile("sword")))
+    vp0 = state.vagabond().vp
+
+    acts = legal_actions(state)
+    qacts = [a for a in acts if isinstance(a, VagabondQuest)]
+    assert sorted(a.reward for a in qacts if a.quest_id == "errand-fox") == \
+        ["cards", "vp"], "errand-fox (tea+boots) offers both rewards: %r" % qacts
+    assert not any(a.quest_id == "escort" for a in qacts), (
+        "escort (mouse) does not match fox clearing")
+
+    state = apply(state, VagabondQuest(player=V, quest_id="errand-fox",
+                                       reward="vp"), rng)
+    vs = state.vagabond()
+    assert vs.vp == vp0 + 2, "2nd fox quest = 2VP: %d" % (vs.vp - vp0)
+    assert next(t for t in vs.items if t.kind == "tea").exhausted, "tea spent"
+    assert next(t for t in vs.items if t.kind == "boots").exhausted, "boots spent"
+    assert not next(t for t in vs.items if t.kind == "sword").exhausted
+    assert len(vs.quests_open) == 3, "replenished to 3 open quests"
+    assert "errand-fox" in vs.quests_done
+    assert len(vs.quest_deck) == len(deck) - 1
+    print("  quest: errand-fox solved for 2VP, open quests back to 3")
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
@@ -477,6 +798,20 @@ def main() -> int:
     test_base_removed()
     print("selftest: alliance guerrilla dice reversal (8.2.2)")
     test_guerrilla_dice()
+    print("selftest: vagabond explore (9.5.3)")
+    test_vagabond_explore()
+    print("selftest: vagabond aid & relationship (9.5.4 / 9.2.9)")
+    test_vagabond_aid_relationship()
+    print("selftest: vagabond hostility & infamy (9.2.9.III)")
+    test_vagabond_hostility_infamy()
+    print("selftest: vagabond battle readings (9.2.4/9.2.6/9.2.7)")
+    test_vagabond_battle_readings()
+    print("selftest: vagabond revolt damage (9.2.2.I)")
+    test_vagabond_revolt_damage()
+    print("selftest: vagabond evening (9.6)")
+    test_vagabond_evening()
+    print("selftest: vagabond quest (9.5.5)")
+    test_vagabond_quest()
     print("OK")
     return 0
 

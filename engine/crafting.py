@@ -35,7 +35,8 @@ def _can_pay(cost, available_suits: List[str]) -> bool:
 def craft_tool_suits(state: GameState, faction: FactionId) -> List[str]:
     """派閥のクラフトツールが提供する動物種の一覧。
 
-    猫野侯国=工房(6.2.1)、鷲巣王朝=止まり木(7.2.1)。他はフェーズ2以降。
+    猫野侯国=工房(6.2.1)、鷲巣王朝=止まり木(7.2.1)、
+    森林連合=支持トークン(8.2.1)、放浪部族=H(9.2.1)。
     """
     from .types import B_WORKSHOP
     if faction == FactionId.MARQUISE:
@@ -49,6 +50,16 @@ def craft_tool_suits(state: GameState, faction: FactionId) -> List[str]:
         return [suit for _, suit in eyrie_available_tools(state)]
     if faction == FactionId.ALLIANCE:
         return [suit for _, suit in alliance_available_tools(state)]
+    if faction == FactionId.VAGABOND:
+        # 全Hの動物種=放浪者コマの現在広場(9.2.1)。樹林ではクラフト不可
+        # (広場の動物種がないため, DESIGN.md 8.3)。使用可能な H は
+        # 未使用(表向き)・非損傷のもの(exhaust が 1ターン1回制限 4.1.1 を兼ねる)。
+        from .factions.vagabond import HAMMER, _count_payable
+        vs = state.vagabond()
+        if vs.pawn_clearing is None:
+            return []
+        n = _count_payable(vs.items, HAMMER)
+        return [state.map.clearing(vs.pawn_clearing).suit.value] * n
     return []
 
 

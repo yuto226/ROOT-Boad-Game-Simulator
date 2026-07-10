@@ -237,6 +237,7 @@ def _move_options(state: GameState, card: str) -> List[Action]:
 
 def _battle_options(state: GameState, card: str) -> List[Action]:
     """戦闘(7.5.2.III): 一致広場を戦場に戦闘1回(4.3)。"""
+    from .vagabond import vagabond_in_clearing
     out: List[Action] = []
     for cs in state.clearings:
         if cs.soldier_count(EYRIE) <= 0 or not _matches(state, card, cs.cid):
@@ -248,6 +249,9 @@ def _battle_options(state: GameState, card: str) -> List[Action]:
         for p in cs.buildings + cs.tokens:
             if p.faction != EYRIE:
                 defenders.add(p.faction)
+        # 放浪者コマも戦闘対象(9.2.2。放浪部族参戦時のみ)
+        if vagabond_in_clearing(state, cs.cid):
+            defenders.add(FactionId.VAGABOND)
         for d in sorted(defenders, key=lambda f: f.value):
             out.append(EyrieDecreeBattle(player=EYRIE, card_id=card,
                                          clearing=cs.cid, defender=d))

@@ -268,6 +268,107 @@ class AllianceDiscardSupporter(Action):
     card_id: str
 
 
+# --- 放浪部族固有(第9章) ---
+@dataclass(frozen=True)
+class VagabondChooseCharacter(Action):
+    """キャラクター選択(9.3.1)。"""
+
+    character: str  # thief|tinker|ranger
+
+
+@dataclass(frozen=True)
+class VagabondChooseForest(Action):
+    """放浪者コマの開始樹林選択(9.3.2)。"""
+
+    forest: int
+
+
+@dataclass(frozen=True)
+class VagabondSlip(Action):
+    """潜入(9.4.2)。無償・任意の移動。dst_forest=True なら樹林へ。"""
+
+    dst: int
+    dst_forest: bool = False
+
+
+@dataclass(frozen=True)
+class VagabondMove(Action):
+    """移動アクション(9.5.1)。M1(+敵対兵士のいる広場へは追加M1)。
+
+    移動先は隣接広場のみ(樹林へは移動不可, 9.5.1)。
+    """
+
+    dst: int
+
+
+@dataclass(frozen=True)
+class VagabondBattle(Action):
+    """戦闘アクション(9.5.2)。S1。現在広場で戦闘。"""
+
+    defender: FactionId
+
+
+@dataclass(frozen=True)
+class VagabondExplore(Action):
+    """探索アクション(9.5.3)。F1。現在広場の遺跡アイテム獲得+1VP。"""
+
+
+@dataclass(frozen=True)
+class VagabondAid(Action):
+    """援助アクション(9.5.4)。任意アイテム1。手札1枚を相手へ、相手の作成
+    アイテムを1枚取得可(take_item=ItemKind値 or None)。"""
+
+    faction: FactionId
+    card_id: str
+    take_item: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VagabondQuest(Action):
+    """クエストアクション(9.5.5)。クエスト記載の2アイテム消費。
+    reward="vp"(同種解決数ぶん) or "cards"(2ドロー)。"""
+
+    quest_id: str
+    reward: str
+
+
+@dataclass(frozen=True)
+class VagabondStrike(Action):
+    """狙撃アクション(9.5.6)。C1。現在広場の兵士1個、または兵士のいない
+    プレイヤーの建物/トークン1個を除去。"""
+
+    faction: FactionId
+    target: Tuple  # ("soldier",) / ("building", kind) / ("token", kind)
+
+
+@dataclass(frozen=True)
+class VagabondRepair(Action):
+    """修理アクション(9.5.7)。H1。損傷1枚をかばんへ(裏表維持)。"""
+
+    kind: str
+
+
+@dataclass(frozen=True)
+class VagabondSpecial(Action):
+    """特別アクション(9.5.9)。F1。キャラクターに応じて:
+    盗み(target=対象派閥) / 日常業務(card_id=捨て山の一致カード) / 隠れ家(引数なし)。
+    """
+
+    target: Optional[FactionId] = None
+    card_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VagabondItemChoice(Action):
+    """回復(9.4.1)/損傷(9.2.7)/上限除外(9.6.4)のアイテム選択。
+
+    key はアイテムタイルの正規化シグネチャ (kind, exhausted, damaged, on_track)。
+    どのデシジョンへの応答かは pending 先頭で判別する(AmbushChoice と同方式)。
+    """
+
+    key: Tuple = ()
+
+
 # ============================================================
 #  Decision(保留スタック要素, 3.2)。各 Decision は actor を持つ。
 # ============================================================
@@ -367,3 +468,39 @@ class OutrageDecision(Decision):
 @dataclass(frozen=True)
 class SupportersLimitDecision(Decision):
     """全拠点喪失時の支援者ボックス5枚調整(8.2.4)。actor=森林連合。"""
+
+
+# --- 放浪部族(第9章) ---
+@dataclass(frozen=True)
+class VagabondSetupCharacterDecision(Decision):
+    """キャラクター選択(9.3.1)。"""
+
+
+@dataclass(frozen=True)
+class VagabondSetupForestDecision(Decision):
+    """開始樹林の選択(9.3.2)。"""
+
+
+@dataclass(frozen=True)
+class RefreshDecision(Decision):
+    """鳥歌の回復(9.4.1)。remaining 枚まで裏向きタイルを表に返す。"""
+
+    remaining: int = 0
+
+
+@dataclass(frozen=True)
+class ItemDamageDecision(Decision):
+    """受けヒット(9.2.7)・放浪者コマ全除去(9.2.2.I)のアイテム損傷。
+
+    ``ctx``/``roll_after`` は奇襲2ヒット(4.3.1.II)の後にロールへ継続するための
+    情報(9.2.6 の読み替え。放浪者コマは除去されないため戦闘は継続する)。
+    """
+
+    remaining: int = 0
+    ctx: "BattleCtx" = None
+    roll_after: bool = False
+
+
+@dataclass(frozen=True)
+class ItemLimitDecision(Decision):
+    """夕闇のアイテム上限調整(9.6.4)。上限超過の間1枚ずつゲームから除外。"""

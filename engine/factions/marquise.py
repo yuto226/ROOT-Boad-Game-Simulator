@@ -208,6 +208,7 @@ class MarquiseLogic(FactionLogic):
         return out
 
     def _battle_actions(self, state: GameState) -> List[Action]:
+        from .vagabond import vagabond_in_clearing
         out: List[Action] = []
         for cs in state.clearings:
             if cs.soldier_count(MARQUISE) <= 0:
@@ -219,6 +220,9 @@ class MarquiseLogic(FactionLogic):
             for p in cs.buildings + cs.tokens:
                 if p.faction != MARQUISE:
                     defenders.add(p.faction)
+            # 放浪者コマも戦闘対象(9.2.2。放浪部族参戦時のみ)
+            if vagabond_in_clearing(state, cs.cid):
+                defenders.add(FactionId.VAGABOND)
             for d in sorted(defenders, key=lambda f: f.value):
                 out.append(DeclareBattle(player=MARQUISE, clearing=cs.cid, defender=d))
         return out

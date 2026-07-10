@@ -340,6 +340,7 @@ def _opmove_options(state: GameState) -> List[Action]:
 
 def _opbattle_options(state: GameState) -> List[Action]:
     """作戦・戦闘(8.6.1.II, 4.3): 自兵士のいる戦場で敵1派閥へ宣言。"""
+    from .vagabond import vagabond_in_clearing
     out: List[Action] = []
     for cs in state.clearings:
         if cs.soldier_count(ALLIANCE) <= 0:
@@ -351,6 +352,9 @@ def _opbattle_options(state: GameState) -> List[Action]:
         for p in cs.buildings + cs.tokens:
             if p.faction != ALLIANCE:
                 defenders.add(p.faction)
+        # 放浪者コマも戦闘対象(9.2.2。放浪部族参戦時のみ)
+        if vagabond_in_clearing(state, cs.cid):
+            defenders.add(FactionId.VAGABOND)
         for d in sorted(defenders, key=lambda f: f.value):
             out.append(AllianceOpBattle(player=ALLIANCE, clearing=cs.cid, defender=d))
     return out
@@ -456,6 +460,10 @@ def _remove_all_enemies(state: GameState, cid: int) -> GameState:
         if p.faction == ALLIANCE:
             continue
         state = battle_mod.remove_piece(state, cid, p.faction, ("token", p.kind), ALLIANCE)
+    # 放浪者コマの広場が対象なら、コマは除去せずアイテム3損傷(9.2.2.I)。
+    # 放浪部族不参加なら no-op(既存3派閥の挙動は不変)。
+    from . import vagabond as vagabond_mod
+    state = vagabond_mod.on_area_removal(state, cid)
     return state
 
 

@@ -212,6 +212,53 @@ class AllianceState(FactionState):
 
 
 @dataclass(frozen=True)
+class ItemTile:
+    """放浪部族のアイテムタイル1枚(9.2.5)。
+
+    3ゾーン + 表裏でモデル化する:
+    - ``damaged=True`` → 損傷アイテムボックス
+    - ``on_track=True`` → 配置枠(T/X/B のみ・表向き時)
+    - それ以外 → かばんエリア
+    ``exhausted`` は裏向き(使用済み)。M/S/C/F/H は ``on_track`` を持たない
+    (常に False)。
+    """
+
+    kind: str                 # ItemKind の値("boots"等)
+    exhausted: bool = False   # 裏向き(使用済み)
+    damaged: bool = False     # 損傷アイテムボックスにある
+    on_track: bool = True     # T/X/B が配置枠にある(表向き時のみ)
+
+
+@dataclass(frozen=True)
+class VagabondState(FactionState):
+    """放浪部族の派閥ボード状態(第9章)。
+
+    放浪者コマの位置は ``pawn_clearing`` か ``pawn_forest`` のどちらか一方
+    (排他, 9.2.2)。アイテムは :class:`ItemTile` の列で保持する(fs.items は
+    未使用)。派閥関係(9.2.9)はトラック位置(0=無関心〜3=同盟, -1=敵対)を
+    他派閥ごとに保持する。
+    """
+
+    character: Optional[str] = None          # "thief"/"tinker"/"ranger"(9.3.1)
+    pawn_clearing: Optional[int] = None       # 広場 or 樹林のどちらか一方(排他)
+    pawn_forest: Optional[int] = None
+    items: Tuple[ItemTile, ...] = ()          # ← FactionState.items を上書き(ItemTile 列)
+    #: 派閥関係(9.2.9): 0=無関心,1,2,3=同盟 / -1=敵対。他派閥全員分
+    relationships: Tuple[Tuple[FactionId, int], ...] = ()
+    #: 同一ターン中の派閥ごとの援助回数(9.2.9.I.a。ターン開始でリセット)
+    aids_this_turn: Tuple[Tuple[FactionId, int], ...] = ()
+    quest_deck: Tuple[str, ...] = ()          # 非公開の山(シャッフル済み)
+    quests_open: Tuple[str, ...] = ()         # 公開3枚
+    quests_done: Tuple[str, ...] = ()         # 解決済み(動物種カウントは quests.json 参照)
+    #: 遺跡の隠匿アイテム(9.3.4)。(広場ID, ItemKind値)。探索で除去
+    ruin_items: Tuple[Tuple[int, str], ...] = ()
+    #: 鳥歌の潜入(9.4.2)を今ターン使ったか(begin_phase でリセット)
+    slip_used: bool = False
+    #: 戦闘中に自アイテム損傷で満たしたヒット数(9.2.9.II.d 用。宣言時リセット)
+    damage_hits_this_battle: int = 0
+
+
+@dataclass(frozen=True)
 class DummyState(FactionState):
     """戦闘テスト用の「何もしない」スタブ派閥。"""
 
@@ -265,6 +312,11 @@ class GameState:
     def alliance(self) -> "AllianceState":
         s = self.fs(FactionId.ALLIANCE)
         assert isinstance(s, AllianceState)
+        return s
+
+    def vagabond(self) -> "VagabondState":
+        s = self.fs(FactionId.VAGABOND)
+        assert isinstance(s, VagabondState)
         return s
 
     def clearing(self, cid: int) -> ClearingState:
@@ -419,3 +471,15 @@ class GameState:
         for dec in self.pending:
             assert dec.actor in self.factions, (
                 "pending actor %s not in factions %s" % (dec.actor, self.factions))
+
+        # --- 放浪部族(第9章)の不変量 ---
+        # カード保存則(9.4.4)は放浪部族に影響しない: クエストは 54 枚とは別山
+        # (quest_deck/quests_open/quests_done)であり、援助・盗み・日常業務・
+        # クエスト報酬ドローはいずれも 54 枚のカードを他ゾーン(手札/捨て札/山札)
+        # 間で移すだけ。アイテムタイル(ItemTile)はカードではない。よって上の
+        # カード保存則で放浪部族の hand も自動的に数えられており追加補正は不要。
+        if FactionId.VAGABOND in self.factions:
+            vs = self.vagabond()
+            # 放浪者コマは広場か樹林のどちらか一方のみ(9.2.2。セットアップ中は両 None)
+            assert not (vs.pawn_clearing is not None and vs.pawn_forest is not None), (
+                "vagabond pawn in both clearing and forest")
