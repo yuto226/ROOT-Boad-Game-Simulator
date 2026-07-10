@@ -659,3 +659,130 @@ evaluate(state, me) = faction_score(state, me) - max(faction_score(state, f) for
    妥当性チェック: (b) で放浪部族の勝率が baseline(現状 0%)を明確に上回ること
 3. 決定性: (c) の構成・同一 seed で --workers 1 と並列の games テーブル一致
 4. 性能: (c) 200 試合の実行時間(目安 1 試合 1 秒以内)
+
+## 12. フェーズ6a: RL環境ラッパー(Fable 2026-07-11。実装者はこの設計に従うこと)
+
+Mac のみで開発・テスト可能(GPU 不要)。学習本体(PPO)は 6c であり、ここでは
+「エンジンを RL 学習ループに差し込める形」= 観測テンソル・固定行動空間・AEC 型
+環境 API までを作る。
+
+### 12.1 スコープと依存の分離
+
+- 新規パッケージ **`rl/`** を作る。`engine/`・`bots/` は**変更禁止**(標準ライブラリのみを維持)。
+- `rl/` の依存は **numpy のみ**(Mac に 1.26.4 導入済み)。**pettingzoo には依存しない**:
+  AEC API(reset/step/observe/last/agents/agent_selection/rewards/terminations/
+  truncations/infos)と同名・同義のメソッドを duck-typing で実装する
+  (学習コンテナ側で本家 AEC 継承が必要になったら薄いアダプタを 6c で書く)。
+- リポジトリ直下に **pyproject.toml** を追加し `pip install -e .` 可能にする
+  (パッケージ: engine/bots/sim/simulation/analysis/rl、`engine.data` の JSON を
+  package-data に含める)。`requires-python >= 3.9`(現 Mac は 3.9.6 で全テストが
+  通っている。README の「3.11+」表記は「3.9+」に修正)。numpy は
+  `[project.optional-dependencies] rl = ["numpy"]` に置き、エンジン本体の依存ゼロを守る。
+  ※ この Mac の pip3 は ESP-IDF 環境を向いているため、`pip install -e .` の実行確認は
+  **任意**。従来どおりリポジトリ直下からの `sys.path` 実行で全テストが通ることを必須とする。
+
+### 12.2 行動カタログ(rl/catalog.py)— 固定インデックス+合法手マスク
+
+PPO の行動空間は**固定長**が必要。全 Action を「正準キー」に写し、キーの全列挙に
+インデックスを振る。
+
+- `action_key(state, action) -> tuple`: Action → hashable キー。
+  **不変条件: 同一 legal_actions 内でキーが衝突する2アクションは交換可能
+  (どちらを適用しても同値)でなければならない。**
+- `ActionCatalog`: 全キーの決定的列挙(静的データ= map_autumn.json / cards.json /
+  quests.json / boards.json / enum 定義のみから構築。set 反復・dict 順依存の禁止は
+  エンジン 10.2 と同じ)。`index_of(key)` / `key_at(i)` / `size`。
+- `legal_mask(state, catalog) -> np.bool_[size]` と
+  `action_for(state, index) -> Action`(合法手のうちキー一致の**最初**=
+  legal_actions 順で決定的に解決)。
+
+キー設計(ドメインは静的列挙。派閥・広場等は enum / JSON の定義順):
+
+| Action | キー | ドメインの根拠 |
+|---|---|---|
+| EndPhase / MarquiseRecruit / EyrieSkipDecree / EyrieTurmoil / AllianceEndOps / VagabondExplore | (型名,) | パラメータなし |
+| CraftCard / DiscardCard / MarquisePlayBirdCard / AllianceMobilize / AllianceTrain / AllianceDiscardSupporter | (型名, base_id) | カード実体は base_id で同一視(cards.json 定義順)。手札を離れるカードは銘柄が戦略価値を持つ |
+| AmbushChoice / OutragePay | (型名, base_id or None) | None=しない/一致なし |
+| DeclareBattle / AllianceOpBattle | (型名, clearing, defender) | defender は FactionId 全メンバー(死にインデックス許容) |
+| MarquiseBuild | (型名, clearing, kind) | kind 3種 |
+| MarquiseMarch | (型名, src, dst, count) | (src,dst)=隣接ペア(有向)、count 1..25 |
+| MarquiseLabor | (型名, clearing, base_id) | |
+| SetupChooseKeep / EyrieChooseCorner | (型名, corner) | 4隅 |
+| EyrieChooseLeader | (型名, leader) | 君主4種 |
+| EyrieAddToDecree | (型名, base_id, column) | column 0..3 |
+| EyriePlaceRoost / EyrieDecreeBuild※ / EyrieRecruit※ | (型名, [suit,] clearing) | ※勅令系はカードがボードに残り銘柄が無意味なので **suit に縮約**(4種) |
+| EyrieDecreeMove | (型名, suit, src, dst, count) | count 1..20 |
+| EyrieDecreeBattle | (型名, suit, clearing, defender) | |
+| AllianceRevolt / SpreadSympathy / OpRecruit / OpOrganize | (型名, clearing) | |
+| AllianceOpMove | (型名, src, dst, count) | count 1..10 |
+| VagabondChooseCharacter | (型名, character) | 3種 |
+| VagabondChooseForest | (型名, forest) | 7樹林 |
+| VagabondSlip | (型名, dst, dst_forest) | 広場12+樹林7 |
+| VagabondMove | (型名, dst) | 12 |
+| VagabondBattle | (型名, defender) | |
+| VagabondAid | (型名, faction, base_id, take_item or None) | take_item は ItemKind 8種+None |
+| VagabondQuest | (型名, quest_id, reward) | 15×2 |
+| VagabondStrike | (型名, faction, target) | target=("soldier",)/("building",kind5)/("token",kind3) |
+| VagabondRepair | (型名, kind) | ItemKind 8種 |
+| VagabondSpecial | (型名, target or None, base_id or None) | 盗み=(faction,None)/日常業務=(None,base)/隠れ家=(None,None) |
+| AllocateHit | (型名, target) | VagabondStrike と同じ target 列挙 |
+| VagabondItemChoice | (型名, kind, exhausted, damaged, on_track) | 8×2×2×2=64(不能組合せは死にインデックス) |
+
+概算 size ≈ 1万弱(march 950 + decree move 3040 + aid ~1800 + 残り)。死にインデックス
+(実現不能なキー)は許容する — マスクが常に False になるだけで学習に無害。
+
+### 12.3 観測エンコーダ(rl/encoder.py)
+
+- `ObservationSpec(factions: tuple)` がレイアウトを確定し、
+  `encode(state, perspective: FactionId) -> np.float32[obs_dim]` を提供する。
+- **完全情報**(6c の初期方針): 相手の手札もエンコードする。山札の並び・放浪部族の
+  遺跡アイテム内訳は入れない(枚数のみ)。
+- perspective はブロックの並べ替えではなく **onehot で示す**(レイアウト固定。
+  self-play で両側を同一ネットにするため)。
+- ブロック構成(実装者は state.py を読んでフィールドを確定してよい。必須要件は
+  「レイアウトが factions から決定的」「全特徴を概ね [0,1] に正規化」
+  「`spec.describe() -> {ブロック名: slice}` を提供」の3点):
+  - global: phase onehot / turn 正規化 / 手番 onehot / perspective onehot /
+    山札・捨て札枚数 / pending 先頭 Decision 型 onehot(actions.py の Decision 全型)+
+    actor onehot + remaining/hits 正規化
+  - clearing×12: suit onehot / ruin / slots / 派閥別兵士数 / 建物種別数 / トークン種別数 /
+    controller onehot
+  - faction×参加派閥: vp/30 / 手札の base_id 別カウント / soldiers_supply /
+    派閥固有(猫: 木材・残建物・workshop_used、鷲巣: 勅令 column×suit カウント・君主 onehot・
+    忠臣・止まり木残、連合: 支援者 suit 別カウント・officers・拠点・支持残、
+    部族: ItemTile kind×(表裏/損傷/枠)カウント・relationships onehot・クエスト公開/解決・
+    コマ位置 onehot(広場12+樹林7)・キャラ onehot)
+
+### 12.4 環境(rl/env.py)
+
+- `RootEnv(factions, max_turns=300, auto_single=True, seed=None)`。AEC 互換:
+  `reset(seed)` / `agent_selection`(= FactionId.value)/ `observe(agent)` →
+  `{"observation": np.float32[obs_dim], "action_mask": np.bool_[catalog.size]}` /
+  `step(action_index)` / `last()` / `agents` / `rewards` / `terminations` /
+  `truncations` / `infos`。
+- `auto_single=True`: 合法手が1つだけの間は自動適用して次の意思決定点まで進める
+  (エピソード長の短縮。run_game のターン数と一致しなくなる点は仕様)。
+- 報酬: 終局時に勝者 +1・他 -1、タイムアウト(max_turns 超過)は全員 0。途中報酬 0。
+  `vp_shaping: float = 0.0`(>0 なら自派閥 VP 増分×係数を毎 step 加算、6c で使うかは未定)。
+- 乱数: reset で `random.Random(seed)` を1つ作り new_game / apply に注入
+  (決定性 10.2 に従い、同一 seed+同一行動列で軌跡完全一致)。
+- `infos[agent]` に winner / turns / 最終 vp。
+
+### 12.5 検証(tests/test_rl.py。numpy 未導入環境では skip マーク)
+
+1. カタログ決定性: size 固定、index↔key 全単射、PYTHONHASHSEED を変えた subprocess で
+   size と先頭/末尾キーが一致
+2. 整合性: 4派閥ランダム対戦 20 試合の全意思決定点で、(a) 全合法手が action_key で
+   インデックス化できる (b) mask の True 数 ≧ 1 (c) `action_for(state, i)` が
+   合法手に含まれる(mask=True の全 i)
+3. env 決定性: 同一 seed・マスク上のランダムサンプリング(独立 rng)で2回走らせ、
+   obs/reward/終局が完全一致。obs は全ステップ有限値
+4. episode 完走: 4派閥で terminated or truncated まで到達、勝者 reward=+1/-1 の整合
+
+### 12.6 完了条件(subagent の報告に含めること)
+
+1. `python3 -m pytest tests/ -q` 全パス(既存 54+1 にリグレッションなし)
+2. catalog.size と obs_dim(4派閥時)の実測値
+3. 12.5 の各テスト結果とエピソード長(auto_single 前後の平均 step 数、10 試合程度)
+4. 性能: env のランダム rollout 10 試合の所要時間(6c の学習スループット見積りに使う)
+5. レビュー注目点(ファイル:行)

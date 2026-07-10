@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "root-simulator"
+version = "0.6.0"
+description = "ボードゲーム ROOT の非対称対戦シミュレータ(エンジン+bot+RL環境ラッパー)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+# エンジン本体(engine/bots/sim/simulation/analysis)は標準ライブラリのみ。
+# 外部依存はここに置かない(DESIGN.md 12.1)。
+dependencies = []
+
+[project.optional-dependencies]
+# RL 環境ラッパー(rl/)のみ numpy に依存する(DESIGN.md 12.1)。
+# エンジン本体の依存ゼロを守るため、numpy は optional に隔離する。
+rl = ["numpy"]
+
+[tool.setuptools]
+# フラットレイアウト。トップレベルの各パッケージを明示列挙する。
+packages = [
+    "engine",
+    "engine.factions",
+    "bots",
+    "bots.heuristic",
+    "sim",
+    "simulation",
+    "analysis",
+    "rl",
+]
+
+[tool.setuptools.package-data]
+# engine/data/*.json(マップ・カード・クエスト・派閥ボード)を同梱する(12.1)。
+engine = ["data/*.json"]
