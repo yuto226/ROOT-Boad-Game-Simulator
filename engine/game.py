@@ -153,10 +153,14 @@ class GameResult:
 
 
 def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
-             seed: int, max_turns: int = 300) -> GameResult:
+             seed: int, max_turns: int = 300,
+             validate_each_step: bool = False) -> GameResult:
     """1試合を回す(3.8)。policies は faction -> Policy。
 
     30VP 到達で即勝利(3.1)。max_turns 超過で timeout 引き分け。
+
+    ``validate_each_step=True`` のとき、各 apply 後に ``state.validate()`` を
+    呼んで状態不変量(9.4)を検証する。既定 False(性能への影響を避ける)。
     """
     rng = random.Random(seed)
     state = new_game(factions, rng)
@@ -178,6 +182,8 @@ def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
             policy = policies[state.to_act()]
             action = policy.choose(state, acts, rng)
         state = apply(state, action, rng)
+        if validate_each_step:
+            state.validate()
 
     return GameResult(
         winner=state.winner,

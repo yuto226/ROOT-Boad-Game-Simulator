@@ -25,6 +25,8 @@ def main(argv: List[str] = None) -> int:
     parser.add_argument("--max-turns", type=int, default=300)
     parser.add_argument("--factions", type=str, default="marquise",
                         help="カンマ区切りの派閥リスト(例: marquise,eyrie)。既定はソロ猫")
+    parser.add_argument("--validate", action="store_true",
+                        help="各 apply 後に state.validate() で不変量(9.4)を検証する")
     args = parser.parse_args(argv)
 
     factions = tuple(FactionId(name.strip()) for name in args.factions.split(","))
@@ -39,6 +41,7 @@ def main(argv: List[str] = None) -> int:
             policies=policies,
             seed=seed,
             max_turns=args.max_turns,
+            validate_each_step=args.validate,
         )
         results.append(result)
         vps = " ".join("%s=%d" % (f.value, result.vps[f]) for f in factions)

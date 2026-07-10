@@ -12,14 +12,36 @@ from typing import Dict, List, Optional, Tuple
 from .board import MapData
 from .cards import CardIndex
 from .types import (
+    B_BASE,
+    B_ROOST,
+    CLEARING_SUITS,
     FactionId,
     ItemKind,
+    LOYAL_VIZIER,
+    MARQUISE_BUILDINGS,
     Phase,
     Piece,
     Suit,
     T_KEEP,
+    T_SYMPATHY,
     T_WOOD,
 )
+
+# --- 派閥ごとの兵士サプライ上限(サプライ+盤上の合計 ≤ 上限, 9.4) ---
+# engine/game.py の _initial_faction_state の初期サプライ値と同期させること。
+# 出典: Law of Root 6.3.1(猫25)・7.3.1(鷲巣20)・8.3.1(連合10)。
+# DUMMY/VAGABOND 等の未対応派閥は当面チェック対象外(None 扱い)。
+MAX_SOLDIERS: Dict[FactionId, int] = {
+    FactionId.MARQUISE: 25,
+    FactionId.EYRIE: 20,
+    FactionId.ALLIANCE: 10,
+}
+#: 木材トークン上限(猫)。出典: game.py _initial_faction_state の wood_supply=8(6.3.1)。
+MAX_WOOD = 8
+#: 支持トークン上限(連合)。出典: AllianceState docstring "0..10"(支持エリアトラック, 8.2)。
+MAX_SYMPATHY = 10
+#: 城砦トークン上限(猫)。出典: 6.2.2(城砦は1個のみ)。
+MAX_KEEP = 1
 
 # --- 兵士数の内部表現ヘルパ(FactionId -> int のタプル対) ---
 SoldierMap = Tuple[Tuple[FactionId, int], ...]
@@ -313,8 +335,9 @@ class GameState:
                 out.append((k, n))
         return dataclasses.replace(self, supply_items=tuple(out))
 
-    # --- デバッグ用不変量チェック(6 テスト戦略) ---
+    # --- デバッグ用不変量チェック(6 テスト戦略 / 9.4) ---
     def validate(self) -> None:
+        # --- 既存: 枠数・兵士非負・VP非負 ---
         for cs in self.clearings:
             cl = self.map.clearing(cs.cid)
             assert cs.occupied_slots() <= cl.slots, (
@@ -322,3 +345,77 @@ class GameState:
             assert cs.total_soldiers() >= 0
         for fs in self.faction_states:
             assert fs.vp >= 0, "negative VP for %s" % fs.faction
+
+        # --- 9.4.1: 派閥ごとの兵士総数(サプライ+盤上)≤ 上限 ---
+        for fs in self.faction_states:
+            limit = MAX_SOLDIERS.get(fs.faction)
+            if limit is None:
+                continue  # DUMMY/VAGABOND 等は未対応(チェック対象外)
+            on_board = sum(cs.soldier_count(fs.faction) for cs in self.clearings)
+            total = fs.soldiers_supply + on_board
+            assert total <= limit, (
+                "soldier total over limit for %s: %d/%d (supply=%d board=%d)"
+                % (fs.faction, total, limit, fs.soldiers_supply, on_board))
+
+        # --- 9.4.2: 建物種ごとの盤上数 ≤ 印刷数(boards.json 由来) ---
+        building_limits: Dict[Tuple[FactionId, str], int] = {}
+        if FactionId.MARQUISE in self.factions:
+            bvp = self.board_defs["marquise"]["building_vp"]
+            for kind in MARQUISE_BUILDINGS:
+                building_limits[(FactionId.MARQUISE, kind)] = len(bvp[kind])
+        if FactionId.EYRIE in self.factions:
+            building_limits[(FactionId.EYRIE, B_ROOST)] = len(
+                self.board_defs["eyrie"]["roost_vp"])
+        if FactionId.ALLIANCE in self.factions:
+            building_limits[(FactionId.ALLIANCE, B_BASE)] = len(CLEARING_SUITS)
+        building_counts: Dict[Tuple[FactionId, str], int] = {}
+        for cs in self.clearings:
+            for p in cs.buildings:
+                key = (p.faction, p.kind)
+                building_counts[key] = building_counts.get(key, 0) + 1
+        for key, lim in building_limits.items():
+            got = building_counts.get(key, 0)
+            assert got <= lim, (
+                "building %s over limit: %d/%d" % (key, got, lim))
+
+        # --- 9.4.3: トークン上限(木材≤8・共感≤10・城砦≤1) ---
+        if FactionId.MARQUISE in self.factions:
+            wood_board = sum(cs.wood_count(FactionId.MARQUISE) for cs in self.clearings)
+            wood_supply = self.marquise().wood_supply
+            assert wood_board + wood_supply <= MAX_WOOD, (
+                "wood over limit: board=%d + supply=%d > %d"
+                % (wood_board, wood_supply, MAX_WOOD))
+            keep_board = sum(
+                1 for cs in self.clearings for p in cs.tokens
+                if p.faction == FactionId.MARQUISE and p.kind == T_KEEP)
+            assert keep_board <= MAX_KEEP, (
+                "keep tokens over limit: %d/%d" % (keep_board, MAX_KEEP))
+        if FactionId.ALLIANCE in self.factions:
+            symp_board = sum(
+                1 for cs in self.clearings for p in cs.tokens
+                if p.faction == FactionId.ALLIANCE and p.kind == T_SYMPATHY)
+            assert symp_board <= MAX_SYMPATHY, (
+                "sympathy tokens over limit: %d/%d" % (symp_board, MAX_SYMPATHY))
+
+        # --- 9.4.4: カード保存則 ---
+        # 全カード枚数(コピー込み)。2人戦は圧倒カードを山札から除く(5.1.3)ため、
+        # それらは盤面のどこにも属さない → 期待枚数から差し引く。
+        total_cards = sum(d.copies for d in self.cards.defs)
+        dominance = sum(d.copies for d in self.cards.defs if d.is_dominance)
+        expected = total_cards - (dominance if len(self.factions) == 2 else 0)
+        count = len(self.deck) + len(self.discard)
+        for fs in self.faction_states:
+            count += len(fs.hand) + len(fs.crafted_cards)
+        if FactionId.ALLIANCE in self.factions:
+            count += len(self.alliance().supporters)
+        if FactionId.EYRIE in self.factions:
+            # 忠臣(LOYAL_VIZIER)は山札に存在しない擬似ID → 54枚から除外する。
+            for col in self.eyrie().decree:
+                count += sum(1 for c in col if c != LOYAL_VIZIER)
+        assert count == expected, (
+            "card conservation broken: counted %d, expected %d" % (count, expected))
+
+        # --- 9.4.5: pending の actor が state.factions に含まれる ---
+        for dec in self.pending:
+            assert dec.actor in self.factions, (
+                "pending actor %s not in factions %s" % (dec.actor, self.factions))
