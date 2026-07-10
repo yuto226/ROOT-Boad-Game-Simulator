@@ -23,16 +23,19 @@ def _latest_run_id(conn: sqlite3.Connection) -> Optional[int]:
 def _print_runs_list(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         "SELECT run_id, created_at, label, factions, games, base_seed, "
-        "max_turns, elapsed_sec FROM runs ORDER BY run_id DESC"
+        "max_turns, elapsed_sec, bots FROM runs ORDER BY run_id DESC"
     ).fetchall()
     if not rows:
         print("(runs テーブルは空です)")
         return
-    print("run_id  created_at                label            factions                      games  seed  max_turns  elapsed_sec")
-    for run_id, created_at, label, factions, games, base_seed, max_turns, elapsed_sec in rows:
-        print("%-7d %-25s %-16s %-29s %-6d %-5d %-10d %s"
+    # 旧 run は bots が NULL=random とみなす(DESIGN.md 11.4)。
+    print("run_id  created_at                label            factions                      games  seed  max_turns  elapsed_sec  bots")
+    for (run_id, created_at, label, factions, games, base_seed,
+         max_turns, elapsed_sec, bots) in rows:
+        print("%-7d %-25s %-16s %-29s %-6d %-5d %-10d %-12s %s"
               % (run_id, created_at, label or "-", factions, games, base_seed,
-                 max_turns, "%.1f" % elapsed_sec if elapsed_sec is not None else "-"))
+                 max_turns, "%.1f" % elapsed_sec if elapsed_sec is not None else "-",
+                 bots or "random"))
 
 
 def _percentile(conn: sqlite3.Connection, run_id: int, games: int, q: float) -> int:
@@ -48,20 +51,21 @@ def _percentile(conn: sqlite3.Connection, run_id: int, games: int, q: float) -> 
 def _print_report(conn: sqlite3.Connection, run_id: int) -> None:
     run = conn.execute(
         "SELECT run_id, created_at, label, factions, games, base_seed, max_turns, "
-        "validate, engine_commit, elapsed_sec FROM runs WHERE run_id = ?",
+        "validate, engine_commit, elapsed_sec, bots FROM runs WHERE run_id = ?",
         (run_id,),
     ).fetchone()
     if run is None:
         print("run_id=%d は見つかりません" % run_id)
         return
     (_, created_at, label, factions_str, games, base_seed, max_turns,
-     validate, engine_commit, elapsed_sec) = run
+     validate, engine_commit, elapsed_sec, bots) = run
     factions: List[str] = [f.strip() for f in factions_str.split(",")]
 
     # 1. run メタ情報
     print("[run] run_id=%d created_at=%s label=%s" % (run_id, created_at, label or "-"))
     print("      factions=%s games=%d base_seed=%d max_turns=%d validate=%d"
           % (factions_str, games, base_seed, max_turns, validate))
+    print("      bots=%s" % (bots or "random"))
     print("      engine_commit=%s elapsed_sec=%s"
           % (engine_commit or "-", "%.1f" % elapsed_sec if elapsed_sec is not None else "-"))
 
@@ -124,6 +128,13 @@ def main(argv: List[str] = None) -> int:
 
     conn = sqlite3.connect(args.db)
     try:
+        # DESIGN.md 11.4: 旧DB(bots列なし)を読むためのマイグレーション。
+        # runner.py の _ensure_schema() と同じロジックをここでも独立して実行する
+        # (analysis/ から simulation/ への依存を作らないため import はしない)。
+        try:
+            conn.execute("ALTER TABLE runs ADD COLUMN bots TEXT")
+        except sqlite3.OperationalError:
+            pass
         if args.list:
             _print_runs_list(conn)
             return 0

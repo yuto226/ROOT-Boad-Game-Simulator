@@ -122,12 +122,21 @@
 
 **目的**: ランダムbotより意味のある強さのbotを実装し、バランス検証の実用性を上げる
 
-- [ ] 勢力ごとの評価関数(スコア関数)設計
-- [ ] 評価関数に基づくbotの実装
-- [ ] ランダムbot vs ヒューリスティックbot で勝率比較して妥当性確認
+- [x] 勢力ごとの評価関数(スコア関数)設計 — `engine/DESIGN.md` **11章**(1手先読みgreedy+派閥別評価関数)
+- [x] 評価関数に基づくbotの実装 — `bots/heuristic/`(bot.py+evaluate.py+派閥別3モジュール)
+- [x] ランダムbot vs ヒューリスティックbot で勝率比較して妥当性確認 — 猫1%→78.5%で有効性実証(鷲巣のみ改善なし、下記メモ)
+- [ ] (任意・持ち越し)鷲巣の評価関数チューニング(1-plyでは内乱リスクが見えず勝率0.5%止まり)
 
 **成果物**: `bots/heuristic/`
 **セッション区切りの目安**: 勢力ごとに1セッション目安
+
+**引き継ぎメモ(フェーズ4)**:
+> - セッション完了(2026-07-10): 設計=DESIGN.md **11章**(Fable直接)、実装=Sonnet subagent。方式は**1手先読みgreedy+派閥別評価関数**(候補を`apply`して結果状態をスコアリング。pendingデシジョン含む全意思決定を一様に扱える)。`HeuristicBot(samples=3)`はchooseごとにメインrngを`getrandbits(32)`1回だけ消費(決定性10.2維持、並列/直列一致を検証済み)。
+> - 使い方: `python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0 --bots heuristic`(全派閥一括)または `--bots marquise=heuristic,eyrie=random` 形式。`runs`テーブルに`bots`列追加(旧runはNULL=random扱い、runner/report両方に独立マイグレーションあり)。
+> - 比較結果(200試合・seed 0、run_id 3〜7としてresults.sqliteに保存済み・dashboard確認済み): baseline=連合99%/猫1% → 猫のみh=**猫78.5%** → 全h=猫48.5%/連合51.5%。ランダムbotの連合圧勝を崩し、評価関数フレームワークの有効性を実証。性能は全h 200試合13秒(約0.07秒/試合)。
+> - **鷲巣は改善なし(0%→0.5%)**: 主因は1-ply評価では多ターン先の内乱(7.7)による全VP喪失が原理的に見えないこと(DESIGN.md 11.3の内乱ペナルティは代理指標)。対応候補: (a)評価関数に「勅令の翌ターン遂行可能性」の静的判定を足す (b)フェーズ6のRLに委ねる。次セッションで(a)を試すかはユーザー判断。
+> - 評価関数の重みはDESIGN.md 11.3の初期値のまま(未チューニング)。調整時はrunner+dashboardのrun比較で効果測定する運用。
+> - 次セッション候補: 鷲巣チューニング(上記・任意)or **フェーズ5(放浪部族の実装)**。放浪部族実装後はbots/heuristic/にvagabond.pyの評価モジュール追加が必要(faction_termのディスパッチ表はevaluate.py)。
 
 ---
 

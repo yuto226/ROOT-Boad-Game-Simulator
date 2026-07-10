@@ -536,3 +536,90 @@ matplotlib は導入しない。
 - 完了条件: 既存の `simulation/results.sqlite`(なければ runner で200試合生成)から
   dashboard.html が生成でき、`python3 -m pytest tests/ -q` が全パス。報告には生成HTMLの
   パスとレビュー注目点(ファイル:行)を含める。
+
+---
+
+## 11. フェーズ4: ヒューリスティックbot(Fable 2026-07-10。実装者はこの設計に従うこと)
+
+### 11.1 方式: 1手先読み greedy + 派閥別評価関数
+
+ルールベース(アクション種別ごとの優先順位 if 文)は採らない。`Policy.choose` に来る候補は
+通常アクションだけでなく pending デシジョン(ヒット割り振り・捨て札・君主選択等)を含む
+全意思決定であり、種別網羅が破綻するため。代わりに:
+
+> 各候補アクションを `engine.apply.apply` でシミュレート実行し、結果状態を評価関数で
+> スコアリングして argmax を選ぶ(1-ply greedy)。
+
+- 派閥の知識は評価関数(`faction_score`)に集約する。これがロードマップ成果物の
+  「勢力ごとの評価関数」であり、フェーズ6の RL 報酬設計の下敷きになる。
+- エンジン(`engine/`)・既存 bot(`bots/base.py`, `bots/random_bot.py`)は**変更禁止**。
+  変更可能なのは新規ファイルと runner/report の統合部分(11.4)のみ。
+
+### 11.2 HeuristicBot(bots/heuristic/bot.py)
+
+`Policy` プロトコル実装。コンストラクタ `HeuristicBot(samples: int = 3)`。
+
+`choose(state, actions, rng)`:
+1. `base = rng.getrandbits(32)` — メイン rng の消費は choose 1回につきこの1回だけ
+   (決定性 10.2: 消費列が seed から一意に定まる)。
+2. 各候補 `actions[i]` について `samples` 回シミュレート:
+   `sim_rng = random.Random((base << 16) ^ (i << 8) ^ j)` で
+   `next_state = apply(state, actions[i], sim_rng)` → `score_j = evaluate(next_state, me)`。
+   スコアは samples 回の平均(戦闘ダイス・ドローの乱数ノイズを均す)。
+   `me = state.to_act()`(choose 時点の手番/デシジョン actor)。
+3. 終端ショートカット: `next_state.finished` かつ `winner == me` なら +1e9、
+   winner が他派閥なら -1e9(サンプル平均に含めてよい)。
+4. argmax を返す。同点は**先頭優先**(legal_actions の順序は決定的=10.2 なので決定的)。
+5. `apply` は例外を投げない前提(合法手のみ渡ってくる)。try/except で握りつぶさない。
+
+### 11.3 評価関数(bots/heuristic/evaluate.py + marquise/eyrie/alliance の各モジュール)
+
+```
+evaluate(state, me) = faction_score(state, me) - max(faction_score(state, f) for f in 他派閥)
+```
+(相手項は「首位の他派閥」のみ。妨害の照準をリーダーに合わせる。DUMMY は 0 固定)
+
+`faction_score(state, f)` = 共通項 + 派閥固有項。**重みはすべて初期値**であり、11.5 の
+比較 run で効果を見て調整してよい(調整結果は報告に記録)。
+
+共通項(evaluate.py):
+- `vp * 100`(30VP 到達勝ちなので VP を支配的に)
+- `支配クリアリング数 * 6`(`state.controller(cid)` 使用)
+- `兵士がいるクリアリング数 * 2` + `盤上兵士総数 * 1`
+- `手札枚数 * 2`(ただし 5 枚まで。抱えすぎに報酬を与えない)
+
+猫野侯国(marquise.py)— 建物はエンジン(VP は共通項で計上済み。ここでは将来収入を評価):
+- `盤上の製材所 * 8`(木材収入)+ `募兵所 * 8`(兵士収入)+ `工房 * 5`(クラフト)
+- `盤上の木材トークン * 2`
+
+鷲巣王朝(eyrie.py):
+- `built_roosts * 10`(ターン VP と募兵数の源泉)
+- 内乱リスクの代理指標: `-6 * max(0, 勅令総カード数 - 盤上兵士数//2 - built_roosts - 2)`
+  (1-ply では後日の内乱が見えないため、遂行能力を超えた勅令肥大に事前ペナルティ)
+
+森林連合(alliance.py):
+- `盤上の共感トークン * 8` + `拠点 * 12` + `officers * 5`
+- `支援者枚数 * 2`(7 枚まで。上限超過廃棄に報酬を与えない)
+
+### 11.4 runner/report 統合
+
+- `simulation/runner.py` に `--bots SPEC` を追加。`random`(既定)/`heuristic` で全派閥一括、
+  または `marquise=heuristic,eyrie=random,alliance=random` 形式で派閥別指定。
+  WorkerArgs に bots 指定を追加し `_play_one` 内で per-faction に Policy を構築。
+- `runs` テーブルに `bots TEXT` 列を追加。マイグレーションは接続時に
+  `ALTER TABLE runs ADD COLUMN bots TEXT` を試み `OperationalError`(重複)は無視。
+  既存 DB の旧 run は NULL のまま=random とみなす。`report --list` に bots 列を表示。
+- `--label` を活用し、11.5 の比較 run には内容がわかるラベルを付ける。
+
+### 11.5 完了条件(subagent の報告に含めること)
+
+1. `python3 -m pytest tests/ -q` 全パス + 新規 `tests/test_heuristic.py`:
+   (a) choose の返り値が渡した候補に含まれる (b) 同一入力で同一出力(決定性)
+   (c) 勝利直結アクションを確実に選ぶ(終端ショートカット)
+2. 決定性: heuristic 全派閥・同一 seed で `--workers 1` と並列の games テーブルが一致
+3. 比較 run(各 200 試合・seed 0・marquise,eyrie,alliance)を実行し勝率を報告:
+   baseline 全 random / heuristic を 1 派閥だけに入れた 3 run / 全 heuristic。
+   妥当性チェック: heuristic 化した派閥の勝率が baseline の同派閥勝率を明確に上回ること
+   (特に猫・鷲巣が連合圧勝(baseline 98%)をどれだけ削れるか)。
+4. 性能: 全 heuristic 200 試合の実行時間を報告。目安 1 試合 1 秒以内(並列)。
+   超える場合は samples を下げた結果も報告(既定値変更の判断は Fable レビューで)。

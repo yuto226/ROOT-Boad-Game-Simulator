@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from bots.heuristic import HeuristicBot
 from bots.random_bot import RandomBot
 from engine.game import run_game
 from engine.types import FactionId
@@ -26,19 +27,53 @@ from engine.types import FactionId
 #: ワーカーの戻り値: (seed, winner_value|None, turns, {faction_value: vp}, elapsed_sec)
 WorkerResult = Tuple[int, Optional[str], int, Dict[str, int], float]
 
-#: ワーカーへの引数: (seed, faction_values, max_turns, validate)
-WorkerArgs = Tuple[int, Tuple[str, ...], int, bool]
+#: ワーカーへの引数: (seed, faction_values, max_turns, validate, bot_pairs)。
+#: bot_pairs は (faction_value, bot_name) のタプル列(faction_values と同順=picklable かつ決定的)。
+WorkerArgs = Tuple[int, Tuple[str, ...], int, bool, Tuple[Tuple[str, str], ...]]
+
+#: 使用可能な bot 名(DESIGN.md 11.4)。
+_BOT_NAMES = ("random", "heuristic")
+
+
+def _make_bot(name: str):
+    """bot 名から Policy インスタンスを構築する(DESIGN.md 11.4)。"""
+    if name == "heuristic":
+        return HeuristicBot()
+    return RandomBot()
+
+
+def _parse_bots(spec: str, faction_values: Tuple[str, ...]) -> Tuple[Tuple[str, str], ...]:
+    """--bots SPEC を (faction_value, bot_name) 列に正規化する(DESIGN.md 11.4)。
+
+    形式:
+      - "random" / "heuristic": 全派閥一括
+      - "marquise=heuristic,eyrie=random,...": 派閥別(未指定派閥は random)
+    返り値は常に faction_values と同順(dict 反復順に依存しない=決定性 10.2)。
+    """
+    spec = spec.strip()
+    if spec in _BOT_NAMES:
+        return tuple((f, spec) for f in faction_values)
+    mapping: Dict[str, str] = {}
+    for part in spec.split(","):
+        key, sep, val = part.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if not sep or key not in faction_values or val not in _BOT_NAMES:
+            raise ValueError("不正な --bots 指定: %r(要素 %r)" % (spec, part))
+        mapping[key] = val
+    return tuple((f, mapping.get(f, "random")) for f in faction_values)
 
 
 def _play_one(args: WorkerArgs) -> WorkerResult:
     """1試合を実行するトップレベル関数(picklable。multiprocessing のワーカーで呼ばれる)。
 
-    ワーカー内で RandomBot と policies を構築して run_game を呼ぶ。sqlite には触れない。
+    ワーカー内で bot_pairs に従い per-faction に Policy を構築して run_game を呼ぶ。
+    sqlite には触れない。
     """
-    seed, faction_values, max_turns, validate = args
+    seed, faction_values, max_turns, validate, bot_pairs = args
     factions = tuple(FactionId(v) for v in faction_values)
-    bot = RandomBot()
-    policies = {f: bot for f in factions}
+    bot_map = dict(bot_pairs)
+    policies = {f: _make_bot(bot_map[f.value]) for f in factions}
 
     start = time.perf_counter()
     result = run_game(factions=factions, policies=policies, seed=seed,
@@ -74,7 +109,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             max_turns INTEGER NOT NULL,
             validate INTEGER NOT NULL,
             engine_commit TEXT,
-            elapsed_sec REAL
+            elapsed_sec REAL,
+            bots TEXT
         );
         CREATE TABLE IF NOT EXISTS games (
             run_id INTEGER NOT NULL REFERENCES runs(run_id),
@@ -93,6 +129,12 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (run_id, game_idx, faction)
         );
     """)
+    # 既存 DB(bots 列なし)へのマイグレーション(DESIGN.md 11.4)。
+    # 重複追加時の OperationalError は無視する。旧 run は NULL のまま=random とみなす。
+    try:
+        conn.execute("ALTER TABLE runs ADD COLUMN bots TEXT")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _run_games(tasks: Sequence[WorkerArgs], games: int, workers: int) -> List[WorkerResult]:
@@ -138,14 +180,20 @@ def main(argv: List[str] = None) -> int:
     parser.add_argument("--validate", action="store_true",
                          help="各 apply 後に state.validate() で不変量(9.4)を検証する")
     parser.add_argument("--label", type=str, default=None, help="runs テーブルに残す任意メモ")
+    parser.add_argument("--bots", type=str, default="random",
+                         help="random/heuristic(全派閥一括)または "
+                              "marquise=heuristic,eyrie=random,... 形式(DESIGN.md 11.4)")
     args = parser.parse_args(argv)
 
     faction_values = tuple(name.strip() for name in args.factions.split(","))
     for v in faction_values:
         FactionId(v)  # 不正な派閥名は起動時に弾く
 
+    bot_pairs = _parse_bots(args.bots, faction_values)  # 不正な --bots は起動時に弾く
+    bots_str = ",".join("%s=%s" % (f, name) for f, name in bot_pairs)
+
     tasks: List[WorkerArgs] = [
-        (args.seed + i, faction_values, args.max_turns, args.validate)
+        (args.seed + i, faction_values, args.max_turns, args.validate, bot_pairs)
         for i in range(args.games)
     ]
 
@@ -163,7 +211,8 @@ def main(argv: List[str] = None) -> int:
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO runs (created_at, label, factions, games, base_seed, "
-            "max_turns, validate, engine_commit, elapsed_sec) VALUES (?,?,?,?,?,?,?,?,?)",
+            "max_turns, validate, engine_commit, elapsed_sec, bots) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 datetime.now(timezone.utc).isoformat(),
                 args.label,
@@ -174,6 +223,7 @@ def main(argv: List[str] = None) -> int:
                 int(args.validate),
                 _engine_commit(),
                 elapsed_sec,
+                bots_str,
             ),
         )
         run_id = cur.lastrowid
