@@ -147,7 +147,7 @@
 - [x] 放浪部族の実装(`engine/DESIGN.md` 8章が仕様。設計は完成済み)— Opus subagent、2026-07-10
 - [x] レビュー(Fable直接)+修正+コミット — 2026-07-10完了(a278636)。修正2件、下記メモ
 - [x] 4勢力同時対戦のテスト(フェーズ2のテスト基盤に放浪部族ケースを追加)— Sonnet subagent、53 passed + 1 xfailed(30613b8)
-- [ ] bots/heuristic/ に放浪部族の評価モジュール(vagabond.py の faction_term)追加 ← **次セッション**
+- [x] bots/heuristic/ に放浪部族の評価モジュール(vagabond.py の faction_term)追加 — 2026-07-11完了(4c72a7f)。**フェーズ5完了**
 
 **セッション区切りの目安**: 実装1セッション+レビュー1セッション
 
@@ -160,7 +160,10 @@
 > - **レビューセッションの注目点(subagent自己申告、ファイル:行)**: marquise.py:224/eyrie.py:253/alliance.py:356(3派閥の戦闘対象に放浪者コマ追加=8章に明記なしの必要追加)/vagabond.py:155 _pay_any(援助の支払いタイル自動選択、S/Fも消費し得る)/vagabond.py:910 隠れ家修理3枚の自動選択/state.py:256 slip_used(8.2にないフィールド追加=無限潜入防止)/battle.py:264 無防備判定の式共用/vagabond.py:288 悪名のターン中判定/vagabond.py:895 盗みがrng.randrange消費(3.1の乱数制約からの逸脱として記録)。加えてstate.validate()に放浪者コマ排他不変量を追加、カード保存則は補正不要の判断(要確認)。
 > - **レビューセッション完了(2026-07-10、Fable直接)**: 上記注目点を全件確認し妥当と判断(悪名の「自分のターン中」判定は日本語版法典9.2.9.III.aの明文どおり/狙撃は敵対化あり・悪名なし/カード保存則の補正不要=クエスト山は54枚の外、援助・盗み・日常業務はゾーン間移動のみ)。**修正2件**(a278636): (1)援助9.5.4のアイテム取得を強制に(原文「あるなら…配置する」。take_item=Noneは相手ボックスが空のときのみ合法。DESIGN.md 8.3も更新) (2)_pay/_pay_any/_damage_oneの後に_auto_placeを呼び配置枠の空きを詰める(袋は最大4枚あり得るため)。検証: selftest全パス/pytest 53+1 xfail/4派閥スモーク50試合--validateクラッシュゼロ。
 > - 既知の残課題: 圧倒カード(3.3)未実装のため放浪部族の勝利は30VPのみ/共闘軍9.2.8・同盟の同時移動等9.2.9.II.b〜dは対象外(DESIGN.md 8.1)/夕闇の手札調整とアイテム上限の解決順が原文9.6.3→9.6.4と逆(相互作用がないため挙動同一、修正不要と判断)。
-> - 次セッション: **bots/heuristic/ に放浪部族の評価モジュール追加**(faction_termのディスパッチ表はevaluate.py。設計=Fable直接でDESIGN.md 11章に追記→実装=Sonnet)。効果測定は runner --bots で4派閥比較(現状ランダムbot 100試合: alliance 97/marquise 2/eyrie 1/vagabond 0)。
+> - 評価モジュール追加完了(2026-07-11、設計=DESIGN.md **11.6**(Fable直接)、実装=Sonnet subagent): bots/heuristic/vagabond.py(アイテム経済+派閥関係+位置)。比較run(200試合・seed 0・4派閥、run 10〜13): baseline全random=alliance 99%/vagabond 0% → vagabondのみh=**3%**(有効性確認) → 全h=marquise 40.5%/alliance 59.5%/**vagabond 0%**。並列/直列一致・全h 200試合18.7秒。
+> - **フェーズ5はこれで完了**。READMEもフェーズ5時点に更新済み(17b7c97)。
+> - 持ち越し(任意): 全heuristic環境でのvagabond勝率0%(1-ply評価では相手が強くなると競争力不足。鷲巣の内乱問題と同種でフェーズ6のRLに委ねるのが本線。重みチューニングで多少改善の余地あり)/鷲巣の評価関数チューニング(フェーズ4から持ち越し)。
+> - 次セッション: **フェーズ6a(RL環境ラッパー)**。エンジンのpipインストール可能化(pyproject.toml)→観測エンコーダ→行動の固定インデックス化+合法手マスク→PettingZoo AEC型ラッパー。Macだけで開発・テスト可能(GPU不要)。着手時に6aの詳細設計をDESIGN.mdに書き下ろすこと(Fable直接)。
 
 ---
 
