@@ -1,0 +1,14 @@
+# イメージに入れないもの(docker/Dockerfile のビルドコンテキスト用)
+.git/
+.venv/
+venv/
+docs/
+rl_runs/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.parquet
+simulation/dashboard.html
+.pytest_cache/
+.claude/
+.DS_Store

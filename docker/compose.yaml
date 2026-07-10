@@ -1,0 +1,20 @@
+# フェーズ6b: 学習ジョブの起動定義。
+# 使い方(WSL2 内、リポジトリルートで):
+#   docker compose -f docker/compose.yaml build
+#   docker compose -f docker/compose.yaml run -d train --total-steps 10000000 --run-name gpu-10m
+# detached(-d)で起動すれば SSH が切れても学習は死なない(13.6 / 6b)。
+# 進捗は rl_runs/<run名>/log.csv(ホスト側にマウント)を tail する。
+services:
+  train:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../rl_runs:/workspace/root-sim/rl_runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

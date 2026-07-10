@@ -177,11 +177,11 @@
 - エンジン本体は標準ライブラリのみを維持し、学習スタックとは依存分離(エンジンをpipインストール可能化してコンテナ側から `pip install -e`)
 - 規模感の注意: 100万試合≈10⁸〜10⁹ステップ(AlphaZero級)。まず10⁷〜10⁸ステップ(数万〜数十万試合)から。エンジン速度が律速になったらホットパスのRust/C++移植を検討(その際も `legal_actions`/`apply` のインターフェースと決定性制約=DESIGN.md 10.2が仕様書になる)
 
-### 6a: RL環境ラッパー(Macだけで開発・テスト可能、GPU不要)
-- [ ] エンジンのpipインストール可能化(pyproject.toml)
-- [ ] 観測エンコーダ(GameState→テンソル)
-- [ ] 行動の固定インデックス化+合法手マスク(`legal_actions` から生成)
-- [ ] PettingZoo AEC型環境ラッパー(pendingデシジョン=1ステップ1意思決定に写像)
+### 6a: RL環境ラッパー(Macだけで開発・テスト可能、GPU不要)— **完了(2026-07-11, ebc2d46)**
+- [x] エンジンのpipインストール可能化(pyproject.toml。numpyは[rl] extraに隔離、エンジン依存ゼロ維持)
+- [x] 観測エンコーダ(GameState→テンソル)— `rl/encoder.py`(完全情報・perspective onehot・4派閥でobs_dim=592)
+- [x] 行動の固定インデックス化+合法手マスク — `rl/catalog.py`(正準キー方式、size=7860。カードはbase_id・勅令系はsuit縮約)
+- [x] AEC型環境ラッパー — `rl/env.py`(pettingzoo非依存のAEC互換API。auto_singleで意思決定点のみ、平均223step/エピソード、rollout 0.075秒/試合)
 
 ### 6b: Windows側の学習環境構築
 - [ ] WSL2+Docker+NVIDIA Container Toolkit(RTX 4080 SuperをCUDAコンテナから使う)
@@ -190,7 +190,8 @@
 - [ ] W&B or TensorBoardでMacのブラウザから学習曲線を監視
 
 ### 6c: PPO self-play学習
-- [ ] 2人戦固定マッチアップでPPO学習が回ることを確認(10⁷ステップ規模)
+- [x] 学習コード一式(前半、Mac完結分。2026-07-11, 80b4f2a): `rl/net.py`+`rl/ppo.py`(マスク付きPPO・agent別GAE)+`rl/nn_policy.py`(既存run_gameで評価)+`rl/train.py`/`rl/eval.py`。設計=DESIGN.md **13章**。torchは`.venv/`(gitignore)。スモーク20kステップでentropy低下・KL安定・resume動作、CPU約1350steps/s
+- [ ] 2人戦固定マッチアップでPPO学習が回ることを確認(10⁷ステップ規模)← 10⁵規模まではMacで検証済み(下記メモ)、本格スケールは6bのWindows機で
 - [ ] フェーズ4ヒューリスティックbotをベースラインに評価(ランダムbot勝率100%は無情報のため)
 - [ ] self-playの非定常対策(過去世代とのリーグ戦)→ スケールアップ判断
 
