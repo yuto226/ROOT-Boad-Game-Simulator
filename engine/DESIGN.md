@@ -503,7 +503,7 @@ game_vps (run_id INTEGER NOT NULL, game_idx INTEGER NOT NULL,
   4. 派閥ごとの VP min/avg/max
   5. 勝者別の平均ターン数(どの派閥が勝つとき速いか)
 
-### 10.4 完了条件(subagent の報告に含めること)
+### 10.4 完了条件(セッションA、subagent の報告に含めること)
 
 1. `python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0 --workers 0`
    が並列で完走し、`python3 -m analysis.report` が集計を表示すること(出力を報告に貼る)
@@ -511,3 +511,28 @@ game_vps (run_id INTEGER NOT NULL, game_idx INTEGER NOT NULL,
    一致する**こと(seed 固定の決定性。winner/turns で確認)
 3. `python3 -m pytest tests/ -q` が引き続き全パス(エンジン本体は無変更のはず)
 4. レビュー注目点(ファイル:行)を列挙
+
+### 10.5 フェーズ3セッションB: 可視化ダッシュボード(Fable 2026-07-10)
+
+**方式**: Chart.js の静的HTML生成(Python追加依存ゼロ。Chart.js は CDN の `<script>` タグ)。
+matplotlib は導入しない。
+
+- 新規: `analysis/dashboard.py`(`python3 -m analysis.dashboard`)。既存ファイルの変更は
+  `.gitignore` への出力HTML追加のみ許可。
+- CLI: `--db simulation/results.sqlite`(既定)、`--runs 1,3,5`(省略時=全run)、
+  `-o simulation/dashboard.html`(既定)。
+- 実装: sqlite3 で集計 → データを JSON として HTML に埋め込み(`json.dumps` を
+  `<script>const DATA = ...;</script>` に書き出す)→ 1ファイルの自己完結HTML。
+  Python 側でのテンプレートエンジン等は使わず、文字列テンプレート(`string.Template` か
+  f-string)で十分。HTMLの `<html lang="ja">`、タイトル・ラベルは日本語。
+- 含めるチャート(Chart.js v4、CDN固定バージョン指定):
+  1. **run比較: 派閥別勝率**(グループ棒グラフ。x=run、系列=派閥+timeout。run のラベルは
+     `#id label(games)`)← フェーズ4でbot改善の効果測定に使う主役
+  2. **ターン数分布**(runごとのヒストグラム、ビン幅5ターン。折れ線overlayで複数run比較)
+  3. **派閥別VP分布**(runごと・派閥ごとの平均±min/max。棒+エラーバー相当の表現で可)
+  4. **runメタ情報テーブル**(run_id/created_at/label/factions/games/engine_commit/elapsed)
+- 派閥の色は固定マップ(marquise=#d97706 橙、eyrie=#2563eb 青、alliance=#16a34a 緑、
+  vagabond=#6b7280 灰、timeout=#9ca3af 薄灰)。将来の放浪部族追加でも色が安定するように。
+- 完了条件: 既存の `simulation/results.sqlite`(なければ runner で200試合生成)から
+  dashboard.html が生成でき、`python3 -m pytest tests/ -q` が全パス。報告には生成HTMLの
+  パスとレビュー注目点(ファイル:行)を含める。

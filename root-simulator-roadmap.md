@@ -105,15 +105,16 @@
 - [x] `multiprocessing` による並列対戦実行 — `simulation/runner.py`(workers指定・並列/直列で結果一致の決定性を検証済み)
 - [x] 結果をSQLiteに書き出す — runs/games/game_vps の3テーブル(Parquetは可視化セッションで必要になったら判断)
 - [x] 勝率・ターン数などの基礎集計 — `analysis/report.py`(標準ライブラリのSQL集計。pandasは未導入のまま達成)
-- [ ] 簡易可視化(matplotlib or 既存のChart.jsダッシュボード流用) ← **次ここ(セッションB)**
+- [x] 簡易可視化 — `analysis/dashboard.py`(Chart.js静的HTML生成。Python依存ゼロ、run間比較の4チャート)
 
-**成果物**: `simulation/runner.py`, `analysis/report.py`(+可視化はセッションB)
+**成果物**: `simulation/runner.py`, `analysis/report.py`, `analysis/dashboard.py`
 **セッション区切りの目安**: 1〜2セッション
 
 **引き継ぎメモ(フェーズ3)**:
 > - セッションA完了(2026-07-10): 設計=`engine/DESIGN.md` **10章**(Fable直接)、実装=Sonnet subagent。標準ライブラリのみ(multiprocessing+sqlite3)。使い方: `python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0` → `python3 -m analysis.report`(`--list` でrun一覧、`--run ID` 指定可)。200試合0.6秒(並列)。
 > - **エンジンのバグを1件発見・修正**: `engine/factions/marquise.py` の戦闘対象列挙が未ソートのset反復で、プロセス間で `legal_actions()` の順序が変わり同一seedでも結果が不一致だった(subagentが決定性検証で発見、Fableがeyrie/allianceと同じsortedパターンで修正)。修正後、異なるPYTHONHASHSEEDのプロセス間・並列/直列間で100試合完全一致を確認。決定性制約はDESIGN.md 10.2末尾に明文化。
-> - 次セッション(B): **簡易可視化**。論点: matplotlib導入 or Chart.js静的HTML(依存ゼロ)。データ源は `simulation/results.sqlite`(gitignore済み)。勝率・ターン数分布・VP分布あたりをrun比較できると、フェーズ4のbot改善の効果測定に直結する。
+> - セッションB完了(2026-07-10): **フェーズ3完了**。可視化は Chart.js静的HTML生成(`python3 -m analysis.dashboard [--runs 1,2] [-o simulation/dashboard.html]`、設計=DESIGN.md **10.5**)。matplotlib/pandasは未導入のまま(Python依存ゼロ維持)。派閥色は固定マップ(DESIGN.md 10.5)で放浪部族追加後も安定。出力HTMLはgitignore。
+> - 次セッション: **フェーズ4(ヒューリスティックbot)**。RL(フェーズ6)の評価ベースラインとして必須。効果測定はrunner+dashboardのrun比較がそのまま使える。まずは連合圧勝(ランダムbotの既知傾向)を崩せるかが最初の妥当性チェック。
 
 ---
 
