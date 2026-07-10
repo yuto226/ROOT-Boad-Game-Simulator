@@ -13,7 +13,9 @@ from conftest import make_state, put
 M = FactionId.MARQUISE
 E = FactionId.EYRIE
 A = FactionId.ALLIANCE
+V = FactionId.VAGABOND
 THREE = (M, E, A)
+FOUR = (M, E, A, V)
 
 
 # ---------------- ミニスモーク(9.5) ----------------
@@ -30,6 +32,22 @@ def test_mini_smoke_three_player_validates():
         result = run_game(THREE, policies, seed=seed, max_turns=300,
                           validate_each_step=True)
         # クラッシュせず勝者確定 or timeout で正常終了すれば合格。
+        assert result.turns >= 1
+
+
+def test_mini_smoke_four_player_with_vagabond_validates():
+    """4人戦(猫・鷲巣・連合・放浪部族)を validate_each_step=True で10試合
+    (フェーズ5: 放浪部族実装後の回帰確認。9.5 と同方式)。
+
+    3人戦版と同様、各 apply 後に validate() を呼び、放浪部族参加時も
+    全不変量(9.4)が試合を通して破れないことを検証する。
+    """
+    from bots.random_bot import RandomBot
+    bot = RandomBot()
+    policies = {f: bot for f in FOUR}
+    for seed in range(10):
+        result = run_game(FOUR, policies, seed=seed, max_turns=300,
+                          validate_each_step=True)
         assert result.turns >= 1
 
 
