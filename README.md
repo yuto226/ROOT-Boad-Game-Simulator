@@ -11,18 +11,20 @@
 3. 勝率・ターン数などを集計して**派閥バランスや戦略の統計検証**を行う
 4. (将来)MCTS/強化学習エージェントや観戦UIを載せる
 
-## 現在の進捗(フェーズ1進行中)
+## 現在の進捗(フェーズ5: 基本4派閥そろい踏み)
 
 | 派閥 | 状態 |
 |---|---|
 | 猫野侯国(Marquise de Cat) | ✅ 実装済み(一部簡略化あり、ロードマップ参照) |
 | 鷲巣王朝(Eyrie Dynasties) | ✅ 実装済み(勅令・内乱・君主4種・森の王者・商業軽視) |
 | 森林連合(Woodland Alliance) | ✅ 実装済み(反乱・支持拡大・蜂起・ゲリラ戦・作戦行動) |
-| 放浪部族(Vagabond) | 🚧 未実装(次セッション予定) |
+| 放浪部族(Vagabond) | ✅ 実装済み(アイテム3ゾーン・派閥関係/悪名・戦闘読み替え・クエスト・キャラ3種) |
 
-- 秋マップ(12広場)・山札54枚・派閥ボード数列は公式コンポーネントから確定済み(`rules/data-verification.md`)
-- 2〜3派閥のランダムbot対戦がクラッシュゼロで最後まで回ることを確認済み
-- 未実装の共通ルール: 圧倒(支配)カード(3.3)、城砦の配置禁止(6.2.2)、item以外のクラフト効果(immediate/persistent)
+- 秋マップ(12広場・樹林7)・山札54枚・派閥ボード数列は公式コンポーネントから確定済み(`rules/data-verification.md`)
+- pytest 53件 + 4派閥1000戦スモーク(全ステップ不変量検証付き)がクラッシュゼロ
+- 並列対戦ランナー(SQLite保存)+集計+Chart.jsダッシュボードで run 間の勝率比較が可能
+- ヒューリスティックbot(1手先読みgreedy+派閥別評価関数)がランダムbotの偏りを是正(猫 1%→78.5%)
+- 未実装の共通ルール: 圧倒(支配)カード(3.3)、城砦の配置禁止(6.2.2)、item以外のクラフト効果(immediate/persistent)、放浪部族の共闘軍(9.2.8)・同盟の同時移動/攻撃(9.2.9.II.b〜d)
 
 詳細な進捗・既知の簡略化・セッション引き継ぎメモは [`root-simulator-roadmap.md`](root-simulator-roadmap.md) を参照。
 
@@ -41,6 +43,9 @@ python3 -m sim.smoke --games 30 --seed 0 --factions marquise,eyrie
 
 # 3人戦: 猫 + 鷲巣 + 森林連合
 python3 -m sim.smoke --games 30 --seed 0 --factions marquise,eyrie,alliance
+
+# 4人戦(全派閥)+ 全ステップ不変量検証
+python3 -m sim.smoke --games 50 --seed 0 --factions marquise,eyrie,alliance,vagabond --validate
 ```
 
 出力例:
@@ -54,13 +59,33 @@ turns: min=26 avg=33.9 max=47
 
 勝利条件は30VP到達(3.1)。`--max-turns`(既定300)超過は timeout(引き分け)として記録される。同一シードで結果は完全に再現可能。
 
-### セルフテスト(ルール検証シナリオ)
+### テスト
 
 ```bash
-python3 -m engine.selftest
+python3 -m pytest tests/ -q   # ユニットテスト(合法/違法判定・不変量・ミニスモーク)
+python3 -m engine.selftest    # ルール検証シナリオ(単体でも実行可)
 ```
 
-戦闘の4ステップ・奇襲・鷲巣の内乱(恥辱/追放/失脚/休止)・連合の蜂起/反乱/拠点除去/ゲリラ戦などの固定シナリオを検証する。
+selftest は戦闘の4ステップ・奇襲・鷲巣の内乱(恥辱/追放/失脚/休止)・連合の蜂起/反乱/拠点除去/ゲリラ戦・放浪部族の7シナリオ(探索/援助と関係強化/敵対化と悪名/戦闘読み替え/反乱耐性/夕闇/クエスト)を固定盤面で検証する。
+
+### 大量対戦と統計(フェーズ3〜4)
+
+```bash
+# 並列対戦を回して results.sqlite に保存
+python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance,vagabond --seed 0
+
+# ヒューリスティックbotを使う(全派閥一括 or 派閥別指定)
+python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0 --bots heuristic
+python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0 --bots marquise=heuristic,eyrie=random
+
+# 集計(--list で run 一覧、--run ID で指定)
+python3 -m analysis.report
+
+# Chart.js 静的HTMLダッシュボード(run 間比較)
+python3 -m analysis.dashboard --runs 1,2 -o simulation/dashboard.html
+```
+
+いずれも標準ライブラリのみ(multiprocessing + sqlite3)。並列/直列・プロセス間で同一シードの結果が完全一致する決定性を検証済み。
 
 ### コードからの利用
 
@@ -103,8 +128,11 @@ engine/      コアエンジン(フェーズ1)
   factions/    派閥ロジック(marquise / eyrie / alliance / vagabond)
   data/        マップ・カード・派閥ボードの静的データ(JSON)
   selftest.py  ルール検証シナリオ
-bots/        bot実装(Policyプロトコル + ランダムbot)
-sim/         対戦ランナー(smoke)
+tests/       pytest(フェーズ2。合法/違法判定・不変量・ミニスモーク)
+bots/        bot実装(Policyプロトコル + ランダムbot + heuristic/ 派閥別評価関数bot)
+sim/         スモークランナー(smoke)
+simulation/  並列対戦ランナー + SQLite保存(フェーズ3)
+analysis/    集計(report)・Chart.jsダッシュボード(dashboard)
 tools/       ルールブックPDFの抽出スクリプト
 docs/        ルールブックPDF等のローカル資料(git管理外)
 ```
@@ -115,20 +143,20 @@ docs/        ルールブックPDF等のローカル資料(git管理外)
 - **保留デシジョンスタック**: 1アクションの内部に他プレイヤーの選択が挟まるROOT特有の構造(奇襲・ヒット割り振り・蜂起など)を、`pending` スタックで統一的に処理
 - **派閥ロジックの境界**: 共通アクションの本体はエンジン側、派閥モジュールは「いつ・何回・どのコストで使えるか」だけを差す。派閥固有の読み替え(ゲリラ戦・森の王者など)はエンジン側のフック点で吸収
 
-## 今後のロードマップ(未実装)
+## ロードマップ
 
 | フェーズ | 内容 | 状態 |
 |---|---|---|
 | 0 | ルール構造化(基本4派閥) | ✅ 完了 |
-| 1 | コアエンジン + 4派閥ロジック | 🚧 放浪部族が残 |
-| 2 | テスト・検証基盤(pytest、1000戦スモーク) | 未着手 |
-| 3 | 統計基盤(並列実行・SQLite/Parquet・集計/可視化) | 未着手 |
-| 4 | ヒューリスティックbot(派閥別評価関数) | 未着手 |
-| 5 | 4派閥フル対戦の統合検証 | 未着手 |
-| 6 | (任意)MCTS / 強化学習 | 未着手 |
+| 1 | コアエンジン + 3派閥ロジック(猫・鷲巣・連合) | ✅ 完了 |
+| 2 | テスト・検証基盤(pytest、1000戦スモーク、不変量検証) | ✅ 完了 |
+| 3 | 統計基盤(並列実行・SQLite・集計・ダッシュボード) | ✅ 完了 |
+| 4 | ヒューリスティックbot(派閥別評価関数) | ✅ 完了(鷲巣のチューニングは持ち越し) |
+| 5 | 放浪部族の追加(実装+レビュー+テスト) | 🚧 評価モジュール追加が残 |
+| 6 | 強化学習(PPO self-play、Windows機+Docker+GPU) | 未着手 |
 | 7 | (任意)観戦・対人UI(FastAPI) | 未着手 |
 
-※ 現状のランダムbot同士の勝率(例: 3人戦で森林連合が圧勝)はbotの質を反映したものであり、派閥バランスの結論ではない。意味のあるバランス検証はフェーズ4以降。
+※ ランダムbot同士の勝率(例: 森林連合が圧勝)はbotの質を反映したものであり、派閥バランスの結論ではない。ヒューリスティックbot(フェーズ4)は3派閥でこの偏りを是正済み(猫 1%→78.5%)。
 
 ## 開発の進め方
 
