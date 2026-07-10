@@ -102,13 +102,18 @@
 
 **目的**: 大量自己対戦を回して結果を蓄積・可視化する土台を作る
 
-- [ ] `multiprocessing` による並列対戦実行
-- [ ] 結果をSQLite/Parquetに書き出す
-- [ ] pandasで勝率・ターン数などの基礎集計
-- [ ] 簡易可視化(matplotlib or 既存のChart.jsダッシュボード流用)
+- [x] `multiprocessing` による並列対戦実行 — `simulation/runner.py`(workers指定・並列/直列で結果一致の決定性を検証済み)
+- [x] 結果をSQLiteに書き出す — runs/games/game_vps の3テーブル(Parquetは可視化セッションで必要になったら判断)
+- [x] 勝率・ターン数などの基礎集計 — `analysis/report.py`(標準ライブラリのSQL集計。pandasは未導入のまま達成)
+- [ ] 簡易可視化(matplotlib or 既存のChart.jsダッシュボード流用) ← **次ここ(セッションB)**
 
-**成果物**: `simulation/runner.py`, `analysis/report.ipynb` or `.py`
+**成果物**: `simulation/runner.py`, `analysis/report.py`(+可視化はセッションB)
 **セッション区切りの目安**: 1〜2セッション
+
+**引き継ぎメモ(フェーズ3)**:
+> - セッションA完了(2026-07-10): 設計=`engine/DESIGN.md` **10章**(Fable直接)、実装=Sonnet subagent。標準ライブラリのみ(multiprocessing+sqlite3)。使い方: `python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0` → `python3 -m analysis.report`(`--list` でrun一覧、`--run ID` 指定可)。200試合0.6秒(並列)。
+> - **エンジンのバグを1件発見・修正**: `engine/factions/marquise.py` の戦闘対象列挙が未ソートのset反復で、プロセス間で `legal_actions()` の順序が変わり同一seedでも結果が不一致だった(subagentが決定性検証で発見、Fableがeyrie/allianceと同じsortedパターンで修正)。修正後、異なるPYTHONHASHSEEDのプロセス間・並列/直列間で100試合完全一致を確認。決定性制約はDESIGN.md 10.2末尾に明文化。
+> - 次セッション(B): **簡易可視化**。論点: matplotlib導入 or Chart.js静的HTML(依存ゼロ)。データ源は `simulation/results.sqlite`(gitignore済み)。勝率・ターン数分布・VP分布あたりをrun比較できると、フェーズ4のbot改善の効果測定に直結する。
 
 ---
 

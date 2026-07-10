@@ -15,4 +15,5 @@ venv/
 
 # シミュレーション出力(フェーズ3以降)
 *.sqlite
+simulation/*.sqlite
 *.parquet

@@ -431,3 +431,83 @@ map/boards のロード結果を保持する適切な場所に足す。既存 AP
 2. `python3 -m engine.selftest` が引き続き合格(既存ファイル無変更の確認)
 3. 報告には「レビュー注目点(ファイル:行)」を必須で書く(特に validate() のカード保存則と、
    ルールとの食い違いを見つけた箇所)
+
+---
+
+## 10. フェーズ3セッションA: 並列対戦ランナー+SQLite保存+基礎集計(Fable 2026-07-10)
+
+**スコープ**: 標準ライブラリのみ(multiprocessing / sqlite3)。**追加依存の導入は禁止**
+(pandas・matplotlib・pyarrow はセッションB=可視化で判断する。Parquet 書き出しも B へ先送り)。
+
+### 10.1 構成
+
+```
+simulation/
+  __init__.py
+  runner.py     — 並列対戦ランナー(python3 -m simulation.runner)
+analysis/
+  __init__.py
+  report.py     — 基礎集計レポート(python3 -m analysis.report)
+```
+
+### 10.2 runner.py
+
+- CLI: `--games N --factions marquise,eyrie,alliance --seed 0 --max-turns 300
+  --workers 0(=os.cpu_count) --db simulation/results.sqlite --validate --label "任意メモ"`
+- 実装要点:
+  - ワーカー関数はトップレベル関数(picklable)。引数 `(seed, faction_values, max_turns, validate)`
+    を受け、ワーカー内で `RandomBot` と policies を構築して `run_game` を呼ぶ。
+    戻り値は `(seed, winner_value|None, turns, {faction_value: vp}, elapsed_sec)` のプレーンタプル。
+  - `multiprocessing.Pool(workers)` + `imap_unordered`(chunksize は `max(1, games//(workers*8))`)。
+    親プロセス側で進捗を 100 試合ごとに1行 print。
+  - DB 書き込みは**親プロセスのみ**(ワーカーは sqlite に触らない)。全試合完了後に一括 INSERT
+    + commit(数千件規模なので分割不要)。
+  - `--workers 1` のときは Pool を使わず直列実行(デバッグ用・selftest的に例外がそのまま出る)。
+- スキーマ(`CREATE TABLE IF NOT EXISTS`):
+
+```sql
+runs  (run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+       created_at TEXT NOT NULL,          -- ISO8601 UTC
+       label TEXT,
+       factions TEXT NOT NULL,            -- "marquise,eyrie,alliance"(入力順)
+       games INTEGER NOT NULL, base_seed INTEGER NOT NULL,
+       max_turns INTEGER NOT NULL, validate INTEGER NOT NULL,
+       engine_commit TEXT,                -- `git rev-parse --short HEAD`(失敗時 NULL)
+       elapsed_sec REAL)
+games (run_id INTEGER NOT NULL REFERENCES runs(run_id),
+       game_idx INTEGER NOT NULL,         -- 0..N-1(seed = base_seed + game_idx)
+       seed INTEGER NOT NULL,
+       winner TEXT,                       -- faction value / NULL=timeout
+       turns INTEGER NOT NULL,
+       elapsed_sec REAL,
+       PRIMARY KEY (run_id, game_idx))
+game_vps (run_id INTEGER NOT NULL, game_idx INTEGER NOT NULL,
+          faction TEXT NOT NULL, vp INTEGER NOT NULL,
+          PRIMARY KEY (run_id, game_idx, faction))
+```
+
+- 実行終了時に run_id と1行サマリ(games/wins/timeouts/経過秒)を print する。
+- `simulation/*.sqlite` は `.gitignore` に追加(結果DBはコミットしない)。
+- **エンジン側の決定性制約(2026-07-10 確立)**: `legal_actions()` の返す順序はプロセスの
+  文字列ハッシュシードに依存してはならない。set を反復して Action を列挙する箇所は必ず
+  `sorted(..., key=lambda f: f.value)` を経由すること(marquise の `_battle_actions` が
+  未ソートでプロセス間の再現性を壊していたのを修正済み。eyrie/alliance と同パターン)。
+
+### 10.3 analysis/report.py
+
+- CLI: `--db simulation/results.sqlite [--run ID]`(省略時は最新 run)。`--list` で runs 一覧。
+- 出力(すべて sqlite3 の SQL 集計、print のみ):
+  1. run メタ情報(factions/games/seed/engine_commit/elapsed)
+  2. 派閥ごとの勝率(wins, win%, timeouts)
+  3. ターン数の min/avg/max と分位点(P25/P50/P75。SQL の ORDER BY + OFFSET で算出)
+  4. 派閥ごとの VP min/avg/max
+  5. 勝者別の平均ターン数(どの派閥が勝つとき速いか)
+
+### 10.4 完了条件(subagent の報告に含めること)
+
+1. `python3 -m simulation.runner --games 200 --factions marquise,eyrie,alliance --seed 0 --workers 0`
+   が並列で完走し、`python3 -m analysis.report` が集計を表示すること(出力を報告に貼る)
+2. 同一 `--games/--seed/--factions` なら並列でも直列(`--workers 1`)でも **games テーブルの内容が
+   一致する**こと(seed 固定の決定性。winner/turns で確認)
+3. `python3 -m pytest tests/ -q` が引き続き全パス(エンジン本体は無変更のはず)
+4. レビュー注目点(ファイル:行)を列挙

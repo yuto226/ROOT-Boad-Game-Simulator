@@ -219,7 +219,7 @@ class MarquiseLogic(FactionLogic):
             for p in cs.buildings + cs.tokens:
                 if p.faction != MARQUISE:
                     defenders.add(p.faction)
-            for d in defenders:
+            for d in sorted(defenders, key=lambda f: f.value):
                 out.append(DeclareBattle(player=MARQUISE, clearing=cs.cid, defender=d))
         return out
 
