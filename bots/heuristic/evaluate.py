@@ -14,12 +14,14 @@ from engine.types import FactionId
 from bots.heuristic import alliance as _alliance
 from bots.heuristic import eyrie as _eyrie
 from bots.heuristic import marquise as _marquise
+from bots.heuristic import vagabond as _vagabond
 
-#: 派閥固有項のディスパッチ表(DESIGN.md 11.3)。
+#: 派閥固有項のディスパッチ表(DESIGN.md 11.3 / 11.6)。
 _FACTION_TERMS = {
     FactionId.MARQUISE: _marquise.faction_term,
     FactionId.EYRIE: _eyrie.faction_term,
     FactionId.ALLIANCE: _alliance.faction_term,
+    FactionId.VAGABOND: _vagabond.faction_term,
 }
 
 

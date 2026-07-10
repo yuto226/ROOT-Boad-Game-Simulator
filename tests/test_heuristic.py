@@ -23,6 +23,7 @@ from conftest import find_card, legal_of, make_state, set_hand
 M = FactionId.MARQUISE
 E = FactionId.EYRIE
 A = FactionId.ALLIANCE
+V = FactionId.VAGABOND
 
 
 def test_choose_returns_a_candidate():
@@ -86,6 +87,18 @@ def test_picks_winning_action_via_terminal_shortcut():
 
     chosen = HeuristicBot().choose(state, actions, random.Random(0))
     assert chosen == craft, "終端ショートカットで勝利直結のクラフトを選ぶはず"
+
+
+def test_vagabond_deterministic_same_input_same_output():
+    """(b) 放浪部族(DESIGN.md 11.6)を含む決定性テスト: 同一 state/actions・
+    同一 seed の rng なら choose は同一結果(vagabond.faction_term の経路を含む)。"""
+    state, _ = make_state((M, E, A, V))
+    actions = legal_actions(state)
+    assert actions, "初期状態に合法手があるはず"
+
+    r1 = HeuristicBot().choose(state, actions, random.Random(4321))
+    r2 = HeuristicBot().choose(state, actions, random.Random(4321))
+    assert r1 == r2
 
 
 def test_evaluate_prefers_higher_vp():

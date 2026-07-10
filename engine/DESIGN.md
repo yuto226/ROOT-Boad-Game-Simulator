@@ -613,6 +613,8 @@ evaluate(state, me) = faction_score(state, me) - max(faction_score(state, f) for
 
 ### 11.5 完了条件(subagent の報告に含めること)
 
+(11.6 の放浪部族追加時の完了条件は 11.6 末尾を参照)
+
 1. `python3 -m pytest tests/ -q` 全パス + 新規 `tests/test_heuristic.py`:
    (a) choose の返り値が渡した候補に含まれる (b) 同一入力で同一出力(決定性)
    (c) 勝利直結アクションを確実に選ぶ(終端ショートカット)
@@ -623,3 +625,37 @@ evaluate(state, me) = faction_score(state, me) - max(faction_score(state, f) for
    (特に猫・鷲巣が連合圧勝(baseline 98%)をどれだけ削れるか)。
 4. 性能: 全 heuristic 200 試合の実行時間を報告。目安 1 試合 1 秒以内(並列)。
    超える場合は samples を下げた結果も報告(既定値変更の判断は Fable レビューで)。
+
+### 11.6 放浪部族の評価関数(Fable 2026-07-11。フェーズ5の仕上げ)
+
+新規 `bots/heuristic/vagabond.py` に `faction_term(state)` を実装し、`evaluate.py` の
+`_FACTION_TERMS` に `FactionId.VAGABOND` を追加する。エンジン・既存評価モジュールは変更禁止。
+
+放浪部族は兵士・建物を持たないため共通項(11.3)は実質 vp と手札のみ。派閥固有項で
+**アイテム経済**と**位置**を評価する(VP 獲得イベント自体は 1-ply の apply 結果に
+直接現れるので、ここでは「次以降のターンの稼ぐ力」だけを足す):
+
+- **アイテム経済**(状態は `ItemTile`: kind/exhausted/damaged/on_track):
+  - 非損傷アイテム 1 枚につき +2、さらに表向き(exhausted=False)なら +2
+    (表向き非損傷=+4。無駄なコスト消費・損傷選択で exhausted/damaged を選ぶ誘導)
+  - 非損傷 S(sword)1 枚につき追加 +2(出目上限 9.2.6・無防備回避 9.2.4 の源泉)
+  - 配置枠(on_track)の表向き T +3 / X +3 / B +2(回復・ドロー・上限のエンジン強化。
+    枠配置は自動処理なので「枠にあるものを損傷・除外で失わない」誘導が主目的)
+- **派閥関係**(9.2.9): トラック位置 rel(0..3)の他派閥合計 × 3
+  (同盟=毎援助+2VP の恒常収入に接近する価値。敵対 -1 は 0 として加算=ペナルティなし。
+  悪名 +1VP は除去の都度 apply 結果に現れるため項は不要)
+- **位置**(潜入 9.4.2・移動 9.5.1 の行き先に信号を与える):
+  - 放浪者コマが広場にいる +3(樹林は夜の休息以外は何もできない)
+  - その広場に遺跡があり(cs.ruin)、非損傷 F を持つなら +2(探索 9.5.3 の直前状態)
+  - その広場に配置物を持つ他派閥数 × 2(援助・盗み・戦闘の機会)
+
+重みはすべて初期値(11.3 と同様、比較 run で調整してよい。調整したら報告に記録)。
+
+**完了条件(subagent の報告に含めること)**:
+1. `python3 -m pytest tests/ -q` 全パス(既存 53+1 にリグレッションなし)。
+   `tests/test_heuristic.py` に放浪部族の決定性テスト(同一入力→同一出力)を 1 件追加
+2. 比較 run(各 200 試合・seed 0・factions marquise,eyrie,alliance,vagabond、--label 付き):
+   (a) 全 random baseline (b) vagabond=heuristic のみ (c) 全 heuristic。
+   妥当性チェック: (b) で放浪部族の勝率が baseline(現状 0%)を明確に上回ること
+3. 決定性: (c) の構成・同一 seed で --workers 1 と並列の games テーブル一致
+4. 性能: (c) 200 試合の実行時間(目安 1 試合 1 秒以内)
