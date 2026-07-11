@@ -36,7 +36,7 @@
 
 - [x] **A: 圧倒カード(3.3)+共闘軍(9.2.8)** — 2026-07-11完了(bd83beb+5247e50)。設計=DESIGN.md **14章**。VP凍結の中央集約(mechanics.award_vp)・捨て山リダイレクト(to_discard)・昼光共通フック・鳥歌開始時の圧倒勝利判定・winners(共闘の共同勝利)。rl/はcatalog v2(size 8052、CATALOG_VERSION導入)。500試合ランダム4派閥で圧倒勝利157・共闘勝利84を確認
 - [x] **B: 猫の簡略化バッチ** — 2026-07-11完了。設計=DESIGN.md **15章**。行軍2移動(6.5.2、MarquiseMarchDecision+SkipMove)/野戦病院(6.2.3、イベント単位集計・反乱と狙撃にも適用)/城砦の配置禁止(6.2.2、placement_blocked。xfailは誤読につき正テスト2本に差し替え)/奇襲2ヒットの除去対象選択(4.3.1.II、_finish_allocationに継続処理を統合)。rl/はcatalog v3(size 8096)。ランダム4派閥100戦で行軍2移動目3168回(移動92.2%)・野戦病院709回(発動58.1%)
-- [ ] **C: immediate/persistentクラフト効果** — ホワイトリスト方式(DESIGN.md 3.7)。Armorers/Sappers/Brutal Tactics/Royal Claim/Command Warren/Better Burrow Bank/Cobbler/Codebreakers/Stand and Deliver!/Tax Collector/Favor×3
+- [x] **C: immediate/persistentクラフト効果** — 2026-07-12完了(b9b48c5)。設計=DESIGN.md **18章**。13種(Codebreakersは完全情報ゆえ除外、Scouting Party追加)。戦闘の4.3.3効果ステージ新設/Favorはremove_piece共通経路/フェイズ効果は「フェイズ中いつでも1回」に緩和(明記)。rl: catalog v4(size 8129)+観測に継続効果multi-hot。200試合でクラフト1318回・効果使用3741回
 - [ ] **D(任意): 細部** — 猫の木材支払い広場選択/工房プールの1ターン1クラフト制限/鷲巣クラフトany割当/連合の支援者支払い選択・戒厳令(8.4.2.II.a)の解釈確認/部族の_pay_any・隠れ家自動選択/同盟の同時移動・攻撃・肩代わり(9.2.9.II.b〜d)
 
 **引き継ぎメモ**:
@@ -73,7 +73,7 @@
 > - 次セッションの最初の作業: WSL2のUbuntu内で git clone(SSH鍵の用意 or HTTPSで)→ `docker compose -f docker/compose.yaml build` → 学習ジョブ投入
 > - RL ckpt互換性: フェーズR-B完了で catalog v3(size 8096)。旧ckptからのresumeは不可(CATALOG_VERSIONで検出)
 > - **Mac 50万ステップの結果(rl_runs/mac-500k、猫vs鷲巣)**: entropy 2.39→1.04・KL安定。vs RandomBot=猫席100%/鷲巣席96.9%。vs HeuristicBot=**猫席96.9〜100%**(フェーズ4 botに圧勝)/鷲巣席0〜12.5%。self-playが猫に偏り鷲巣の学習信号が薄い=リーグ戦・shaping・スケールで対処予定
-> - **ckpt非互換に注意**: catalog v2(圧倒カード対応)で行動空間が8052になり、旧ckpt(mac-500k)はresume不可(明示エラーが出る)。GPU学習はv2で新規に回す
+> - **ckpt非互換に注意**: R-C完了で catalog v4(size 8129)。v3以前のckpt(GPU学習をv3で回した場合を含む)はresume・nn観戦不可(CATALOG_VERSIONで明示エラー)。v3のckptを使いたい場合は b9b48c5 より前をcheckoutする
 > - **リーグ戦実装済み(2026-07-11、DESIGN.md 16章)**: `rl/league.py`(OpponentPool)+ppo/train拡張。`--league-prob`(既定0.5、0で従来の純self-play)/`--league-pool-max`(既定20)/`--league-snapshot-every`(既定20更新)。log.csvに league_episodes/league_winrate 列が増えた(旧runのlog.csvとは列非互換)。winrate_seat0/1 は self-playエピソードのみの集計。スナップショットは `rl_runs/<run>/league/snap_*.pt`(間引き時はファイルも削除)、resume時はckptの league_meta から再構築(欠損はwarn+skip)。league有効時のスループットは約4〜5割低下(凍結ネット推論の分)
 > - 次の作業: GPU学習(6bの残り=clone+build+ジョブ投入 → 10⁷ステップをリーグ戦有効で回す)
 
