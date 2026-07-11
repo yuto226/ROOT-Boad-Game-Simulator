@@ -167,6 +167,19 @@
 
 ---
 
+## フェーズR: ルール完全性(2026-07-11 ユーザー決定。フェーズ6と並行、余剰トークンで進める)
+
+**目的**: 既知の簡略化を解消し、バランス統計検証の信頼性を上げる。
+
+- [x] **A: 圧倒カード(3.3)+共闘軍(9.2.8)** — 2026-07-11完了(bd83beb+5247e50)。設計=DESIGN.md **14章**。VP凍結の中央集約(mechanics.award_vp)・捨て山リダイレクト(to_discard)・昼光共通フック・鳥歌開始時の圧倒勝利判定・winners(共闘の共同勝利)。rl/はcatalog v2(size 8052、CATALOG_VERSION導入)。500試合ランダム4派閥で圧倒勝利157・共闘勝利84を確認
+- [ ] **B: 猫の簡略化バッチ** — 行軍2移動(6.5.2)/野戦病院(6.2.3)/城砦の配置禁止(6.2.2、xfail解除)/奇襲2ヒットの除去対象選択
+- [ ] **C: immediate/persistentクラフト効果** — ホワイトリスト方式(DESIGN.md 3.7)。Armorers/Sappers/Brutal Tactics/Royal Claim/Command Warren/Better Burrow Bank/Cobbler/Codebreakers/Stand and Deliver!/Tax Collector/Favor×3
+- [ ] **D(任意): 細部** — 猫の木材支払い広場選択/鷲巣クラフトany割当/連合の支援者支払い選択/部族の_pay_any・隠れ家自動選択/同盟の同時移動・攻撃・肩代わり(9.2.9.II.b〜d)
+
+**注意**: A完了により games テーブルの勝利には圧倒勝利が混ざる(勝因列は未追加=既知の割り切り)。共闘の共同勝利はDBに記録されない(winner=主勝者のみ)。
+
+---
+
 ## フェーズ6: 強化学習(RL)層の追加(2026-07-10 ユーザー構想確定により具体化)
 
 **目的**: PPO self-playで学習したbotを載せる。学習はWindows機(RTX 4080 Super)のDocker環境で実行し、MacからSSHで制御する(PCを起動しておくだけの運用)。
