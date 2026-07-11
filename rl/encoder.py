@@ -33,7 +33,7 @@ from engine.types import (
     Suit,
 )
 
-from .catalog import CARD_BASE_IDS, SUITS
+from .catalog import CARD_BASE_IDS, DOMINANCE_BASE_IDS, SUITS
 
 # --- 固定次元の静的定数 ---
 _N_CLEARINGS = 12
@@ -74,8 +74,8 @@ def _faction_specific_size(fid: FactionId, n_fac: int) -> int:
     if fid == FactionId.ALLIANCE:
         return 11
     if fid == FactionId.VAGABOND:
-        # kind×4(32)+relationships(n_fac)+quests(2)+pawn(19)+character(3)
-        return 32 + n_fac + 2 + _N_FORESTS + _N_CLEARINGS + 3
+        # kind×4(32)+relationships(n_fac)+coalition_with onehot(n_fac)+quests(2)+pawn(19)+character(3)
+        return 32 + n_fac + n_fac + 2 + _N_FORESTS + _N_CLEARINGS + 3
     return 0  # DUMMY 等は共通部のみ
 
 
@@ -86,7 +86,7 @@ class ObservationSpec:
         self.factions: Tuple[FactionId, ...] = tuple(factions)
         f = len(self.factions)
         # 各ブロックのサイズ(下の encode と同順)
-        self._global_size = 3 + 1 + f + f + 2 + len(_DECISION_TYPES) + f + 2
+        self._global_size = 3 + 1 + f + f + 2 + len(_DECISION_TYPES) + f + 2 + len(DOMINANCE_BASE_IDS)
         self._clearing_size = 3 + 1 + 2 + 3 * f + (f + 1)
         # ブロック境界を記録
         blocks: Dict[str, slice] = {}
@@ -100,7 +100,7 @@ class ObservationSpec:
         blocks["clearings"] = slice(clearings_start, cur)
         for fid in self.factions:
             # 共通(vp 1 + 手札 base_id カウント + soldiers_supply 1)+ 派閥固有
-            size = 1 + _N_CARD_BASE + 1 + _faction_specific_size(fid, f)
+            size = 1 + _N_CARD_BASE + 1 + len(DOMINANCE_BASE_IDS) + _faction_specific_size(fid, f)
             blocks["faction_%s" % fid.value] = slice(cur, cur + size)
             cur += size
         self.blocks = blocks
@@ -147,6 +147,11 @@ class ObservationSpec:
             feats.append(0.0)
             feats.append(0.0)
 
+        # dominance_aside の4フラグ(圧倒4種が盤脇にあるか, 14.7)
+        aside_bases = {state.cards.base_id(cid) for cid in state.dominance_aside}
+        for b in DOMINANCE_BASE_IDS:
+            feats.append(1.0 if b in aside_bases else 0.0)
+
         # ============ clearing×12 ============
         for cid in range(_N_CLEARINGS):
             cs = state.clearings[cid]
@@ -175,6 +180,15 @@ class ObservationSpec:
             for b in CARD_BASE_IDS:
                 feats.append(min(counts.get(b, 0) / _HAND_SCALE, 1.0))
             feats.append(min(fs.soldiers_supply / _SOLDIER_SCALE, 1.0))
+            # 発動中の圧倒 suit onehot(4)(14.7)。fs.dominance_card は手札を離れた
+            # インスタンスID(base_id 化しない。suit_of は instance/base どちらでも動く)。
+            dom_suit = (state.cards.suit_of(fs.dominance_card)
+                       if fs.dominance_card is not None else None)
+            didx = SUITS.index(dom_suit) if dom_suit in SUITS else -1
+            drow = [0.0] * len(SUITS)
+            if 0 <= didx < len(SUITS):
+                drow[didx] = 1.0
+            feats.extend(drow)
             # --- 派閥固有 ---
             if isinstance(fs, MarquiseState):
                 self._encode_marquise(feats, fs)
@@ -264,6 +278,13 @@ class ObservationSpec:
         rel = {fac: lvl for fac, lvl in vs.relationships}
         for fid in factions:
             feats.append((rel.get(fid, 0) + 1) / 4.0)
+        # 共闘相手 onehot(n_fac)(9.2.8, 14.7)
+        coalition_idx = (factions.index(vs.coalition_with)
+                         if vs.coalition_with in factions else -1)
+        coalition_row = [0.0] * len(factions)
+        if 0 <= coalition_idx < len(factions):
+            coalition_row[coalition_idx] = 1.0
+        feats.extend(coalition_row)
         # クエスト公開/解決
         feats.append(min(len(vs.quests_open) / 3.0, 1.0))
         feats.append(min(len(vs.quests_done) / 15.0, 1.0))

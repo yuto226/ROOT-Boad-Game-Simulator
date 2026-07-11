@@ -20,7 +20,7 @@ import torch
 
 from engine.types import FactionId
 
-from .catalog import ActionCatalog
+from .catalog import CATALOG_VERSION, ActionCatalog
 from .encoder import ObservationSpec
 from .eval import evaluate_both_seats, parse_factions, select_device
 from .net import build_net
@@ -60,6 +60,7 @@ def _save_ckpt(path: str, trainer: PPOTrainer, update: int,
         "factions": [f.value for f in factions],
         "obs_dim": trainer.net.obs_dim,
         "action_size": trainer.net.action_size,
+        "catalog_version": CATALOG_VERSION,
         "config": {
             "num_envs": cfg.num_envs, "rollout_steps": cfg.rollout_steps,
             "gamma": cfg.gamma, "gae_lambda": cfg.gae_lambda,
@@ -126,6 +127,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     start_update = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        ckpt_catalog_version = ckpt.get("catalog_version")
+        if ckpt_catalog_version != CATALOG_VERSION:
+            raise RuntimeError(
+                "resume failed: checkpoint %s has catalog_version=%r but current "
+                "rl.catalog.CATALOG_VERSION=%d. Action catalog changed incompatibly "
+                "(e.g. dominance-card actions added in 14.7) — old checkpoints cannot "
+                "be resumed across a catalog version bump."
+                % (args.resume, ckpt_catalog_version, CATALOG_VERSION))
+        ckpt_action_size = ckpt.get("action_size")
+        if ckpt_action_size != catalog.size:
+            raise RuntimeError(
+                "resume failed: checkpoint %s has action_size=%r but current "
+                "ActionCatalog().size=%d. This should not happen when catalog_version "
+                "matches — check rl/catalog.py for nondeterminism."
+                % (args.resume, ckpt_action_size, catalog.size))
         net.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         trainer.total_steps = int(ckpt["total_steps"])

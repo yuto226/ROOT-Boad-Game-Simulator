@@ -40,6 +40,10 @@ from engine.types import (
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "data")
 
+#: カタログのバージョン。キー空間(catalog.size)が変わる変更のたびに増やす。
+#: ckpt に保存し resume 時の非互換を検出する(14.7。旧 ckpt を無言で壊さない)。
+CATALOG_VERSION = 2
+
 
 # ============================================================
 #  静的ドメイン(すべて定義順・リスト/タプルで決定的に列挙する)
@@ -57,6 +61,11 @@ ADJ_PAIRS: Tuple[Tuple[int, int], ...] = tuple(
 _CARD_DEFS, _ = load_card_defs()
 #: カードの base_id(cards.json = CardIndex.defs 定義順)。インスタンスの "#n" は付かない。
 CARD_BASE_IDS: Tuple[str, ...] = tuple(d.id for d in _CARD_DEFS)
+
+#: 圧倒カードの base_id 4種(cards.json 定義順, is_dominance で抽出, 14.7)。
+#: ActivateDominance の base_id ドメイン、TakeDominance の dominance_base_id ドメイン、
+#: VagabondCoalition の base_id ドメインに使う。
+DOMINANCE_BASE_IDS: Tuple[str, ...] = tuple(d.id for d in _CARD_DEFS if d.is_dominance)
 
 
 def _load_quest_ids() -> Tuple[str, ...]:
@@ -196,6 +205,13 @@ def action_key(state, action) -> Tuple:
     if name == "VagabondItemChoice":
         # key はすでに (kind, exhausted, damaged, on_track) のタプル(actions.py)
         return (name,) + tuple(action.key)
+    if name == "ActivateDominance":
+        return (name, state.cards.base_id(action.card_id))
+    if name == "TakeDominance":
+        return (name, state.cards.base_id(action.spend_card_id),
+                state.cards.base_id(action.dominance_id))
+    if name == "VagabondCoalition":
+        return (name, state.cards.base_id(action.card_id), action.partner)
     raise KeyError("action_key: unknown action type %s" % name)
 
 
@@ -319,6 +335,17 @@ def _build_keys() -> List[Tuple]:
             for dm in (False, True):
                 for ot in (False, True):
                     add(("VagabondItemChoice", k, ex, dm, ot))
+    # ActivateDominance : (型名, base_id[圧倒4種のみ])(14.7)
+    for b in DOMINANCE_BASE_IDS:
+        add(("ActivateDominance", b))
+    # TakeDominance : (型名, spend_base_id[全カード], dominance_base_id[圧倒4種])(14.7)
+    for spend_b in CARD_BASE_IDS:
+        for dom_b in DOMINANCE_BASE_IDS:
+            add(("TakeDominance", spend_b, dom_b))
+    # VagabondCoalition : (型名, base_id[圧倒4種], partner[FactionId全メンバー])(14.7)
+    for b in DOMINANCE_BASE_IDS:
+        for partner in DEFENDERS:
+            add(("VagabondCoalition", b, partner))
     return keys
 
 

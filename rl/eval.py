@@ -19,7 +19,7 @@ from bots.random_bot import RandomBot
 from engine.game import run_game
 from engine.types import FactionId
 
-from .catalog import ActionCatalog
+from .catalog import CATALOG_VERSION, ActionCatalog
 from .encoder import ObservationSpec
 from .net import build_net
 from .nn_policy import NNPolicy
@@ -55,11 +55,30 @@ def _make_opponent(name: str):
 def load_checkpoint(ckpt_path: str, device: torch.device
                     ) -> Tuple[object, ObservationSpec, ActionCatalog,
                                Tuple[FactionId, ...], Dict]:
-    """チェックポイントを読み、(net, spec, catalog, factions, meta) を返す(13.3)。"""
+    """チェックポイントを読み、(net, spec, catalog, factions, meta) を返す(13.3)。
+
+    catalog_version が現在と不一致なら明示エラーで落とす(14.7。行動空間の
+    サイズが変わった旧 ckpt を無言で壊さないため)。
+    """
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt_catalog_version = ckpt.get("catalog_version")
+    if ckpt_catalog_version != CATALOG_VERSION:
+        raise RuntimeError(
+            "load_checkpoint failed: checkpoint %s has catalog_version=%r but current "
+            "rl.catalog.CATALOG_VERSION=%d. Action catalog changed incompatibly "
+            "(e.g. dominance-card actions added in 14.7) — old checkpoints are "
+            "incompatible with the current action space."
+            % (ckpt_path, ckpt_catalog_version, CATALOG_VERSION))
     factions = tuple(FactionId(v) for v in ckpt["factions"])
     spec = ObservationSpec(factions)
     catalog = ActionCatalog()
+    ckpt_action_size = ckpt.get("action_size")
+    if ckpt_action_size != catalog.size:
+        raise RuntimeError(
+            "load_checkpoint failed: checkpoint %s has action_size=%r but current "
+            "ActionCatalog().size=%d. This should not happen when catalog_version "
+            "matches — check rl/catalog.py for nondeterminism."
+            % (ckpt_path, ckpt_action_size, catalog.size))
     net = build_net(spec.obs_dim, catalog.size, device)
     net.load_state_dict(ckpt["model"])
     net.eval()
