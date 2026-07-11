@@ -158,8 +158,15 @@ def maybe_field_hospital(state: GameState, clearing: int, count: int,
 
 def field_hospital_options(state: GameState,
                            dec: FieldHospitalDecision) -> List[Action]:
-    """野戦病院の選択肢(6.2.3)。使わない(None)+ 一致カード各種。"""
+    """野戦病院の選択肢(6.2.3)。使わない(None)+ 一致カード各種。
+
+    デシジョンが積まれた後に城砦が除去され得る(Favor 18.2 は複数広場を順に
+    処理するため、先の広場の病院デシジョンが残ったまま後の広場で城砦が除去
+    されることがある)。城砦がマップにないときは「使わない」のみを返す。
+    """
     out: List[Action] = [MarquiseFieldHospital(player=MARQUISE, card_id=None)]
+    if _keep_clearing(state) < 0:
+        return out
     for cid in _hospital_cards(state, dec.clearing):
         out.append(MarquiseFieldHospital(player=MARQUISE, card_id=cid))
     return out
@@ -172,7 +179,10 @@ class MarquiseLogic(FactionLogic):
     # -- フェイズ開始の強制処理 --
     def begin_phase(self, state: GameState, rng) -> GameState:
         if state.phase == Phase.BIRDSONG:
-            return self._birdsong(state)
+            state = self._birdsong(state)
+            # 継続効果カードの1ターン1回使用済み(effects_used, 18.1)をリセット。
+            return state.with_faction_state(dataclasses.replace(
+                state.marquise(), effects_used=()))
         if state.phase == Phase.DAYLIGHT:
             ms = state.marquise()
             return state.with_faction_state(dataclasses.replace(

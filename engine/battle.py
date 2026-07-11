@@ -20,8 +20,11 @@ from .actions import (
     AmbushAttackerDecision,
     AmbushDefenderDecision,
     BattleCtx,
+    BattleEffectsDecision,
     DeclareBattle,
     ItemDamageDecision,
+    SkipBattleEffects,
+    UseCraftedEffect,
 )
 from .state import GameState
 from .types import (
@@ -213,42 +216,154 @@ def _push_allocations(state: GameState, ctx: BattleCtx,
     return state.push_pending(*decisions)
 
 
+def _soldier_cap(state: GameState, ctx: BattleCtx, faction: FactionId) -> int:
+    """出目上限の基準(4.3.2.I): 戦場の自兵士数。放浪部族は非損傷Sの枚数(9.2.6)。"""
+    if _is_vagabond(state, faction):
+        return _vagabond_swords(state)
+    return state.clearing(ctx.clearing).soldier_count(faction)
+
+
 def _roll_and_allocate(state: GameState, ctx: BattleCtx, rng) -> GameState:
-    """第2ステップ(4.3.2)〜第4ステップ準備。"""
-    cs = state.clearing(ctx.clearing)
+    """第2ステップ(4.3.2)〜効果使用ステージ(4.3.3, 18.4)への導入。"""
     d1 = rng.randint(1, 6)
     d2 = rng.randint(1, 6)
     hi, lo = max(d1, d2), min(d1, d2)
-    # 出目上限の基準(4.3.2.I: 戦場の自兵士数)。放浪部族は非損傷Sの枚数
-    # (9.2.6)に読み替える(攻守どちら側でも適用)。
-    if _is_vagabond(state, ctx.attacker):
-        atk_sol = _vagabond_swords(state)
-    else:
-        atk_sol = cs.soldier_count(ctx.attacker)
-    if _is_vagabond(state, ctx.defender):
-        def_sol = _vagabond_swords(state)
-    else:
-        def_sol = cs.soldier_count(ctx.defender)
+    atk_sol = _soldier_cap(state, ctx, ctx.attacker)
+    def_sol = _soldier_cap(state, ctx, ctx.defender)
     # 通常(4.3.2): 攻撃側=大きい方、防御側=小さい方。
     # ゲリラ戦(8.2.2): 防御側が森林連合なら攻守のダイス割当を反転する。
     if ctx.defender == FactionId.ALLIANCE:
         atk_roll, def_roll = lo, hi
     else:
         atk_roll, def_roll = hi, lo
-    # 出目上限(4.3.2.I) + 無防備の追加ヒット(4.3.3.II, キャップ対象外)。
-    # 防御側が放浪部族なら無防備判定は「非損傷Sを1枚も所有していない」(9.2.4)。
-    # 放浪部族の def_sol は非損傷S数なので判定式は共通の def_sol == 0 でよい。
-    atk_hits = min(atk_roll, atk_sol) + (1 if def_sol == 0 else 0)
-    def_hits = min(def_roll, def_sol)
-    # 司令官(7.8.3): 鷲巣が攻撃側なら追加1ヒット(4.3.3.I, 出目上限の対象外)
-    if ctx.attacker == FactionId.EYRIE and _eyrie_leader(state) == "commander":
-        atk_hits += 1
-    return _push_allocations(state, ctx, atk_hits, def_hits)
+    # ロール由来ヒット(4.3.2.I: 出目上限=戦場の自兵士数)。armorers(18.4)が
+    # 軽減できるのはこの値のみ。無防備/司令官のボーナスおよび sappers/
+    # brutal-tactics の追加ヒットは対象外(_finalize_battle_effects で加算)。
+    roll_att = min(atk_roll, atk_sol)
+    roll_def = min(def_roll, def_sol)
+    return _start_battle_effects(state, ctx, roll_att, roll_def, rng)
 
 
 def roll_battle(state: GameState, ctx: BattleCtx, rng) -> GameState:
     """ロール以降を実行する公開エントリ(奇襲損傷の後続 4.3.1.II 用)。"""
     return _roll_and_allocate(state, ctx, rng)
+
+
+# ---------------- 戦闘効果使用ステージ(4.3.3, 18.4) ----------------
+#: 攻撃側/防御側それぞれが使える戦闘効果 base_id(所有条件は crafted_effects)。
+_ATTACKER_BATTLE_EFFECTS: Tuple[str, ...] = ("armorers", "brutal-tactics")
+_DEFENDER_BATTLE_EFFECTS: Tuple[str, ...] = ("armorers", "sappers")
+
+
+def _battle_effect_options(state: GameState, faction: FactionId, ctx: BattleCtx,
+                           is_attacker: bool) -> List[str]:
+    """この戦闘でまだ使える戦闘効果カード(18.4)の base_id 一覧。
+
+    armorers/sappers はカード自体が使用時に手元(crafted_effects)から消えるため
+    自然に1回きりになる。brutal-tactics は破棄されないため、``ctx.atk_extra_hits``
+    (brutal-tactics のみが加算する値)で使用済みを判定する。
+    """
+    fs = state.fs(faction)
+    keys = _ATTACKER_BATTLE_EFFECTS if is_attacker else _DEFENDER_BATTLE_EFFECTS
+    out: List[str] = []
+    for key in keys:
+        if key not in fs.crafted_effects:
+            continue
+        if key == "brutal-tactics" and ctx.atk_extra_hits != 0:
+            continue
+        out.append(key)
+    return out
+
+
+def _start_battle_effects(state: GameState, ctx: BattleCtx, roll_att: int,
+                          roll_def: int, rng) -> GameState:
+    """効果使用ステージの開始(4.3.3、攻撃側→防御側の固定順に簡略化, 18.4)。"""
+    if _battle_effect_options(state, ctx.attacker, ctx, True):
+        return state.push_pending(BattleEffectsDecision(
+            actor=ctx.attacker, ctx=ctx, roll_att=roll_att, roll_def=roll_def))
+    return _advance_to_defender_effects(state, ctx, roll_att, roll_def, rng)
+
+
+def _advance_to_defender_effects(state: GameState, ctx: BattleCtx, roll_att: int,
+                                 roll_def: int, rng) -> GameState:
+    if _battle_effect_options(state, ctx.defender, ctx, False):
+        return state.push_pending(BattleEffectsDecision(
+            actor=ctx.defender, ctx=ctx, roll_att=roll_att, roll_def=roll_def))
+    return _finalize_battle_effects(state, ctx, roll_att, roll_def, rng)
+
+
+def _finalize_battle_effects(state: GameState, ctx: BattleCtx, roll_att: int,
+                             roll_def: int, rng) -> GameState:
+    """効果ステージ完了後、ヒットを確定して割り振りへ(18.4)。
+
+    無防備の追加ヒット(4.3.3.II)・司令官(7.8.3)は roll と独立に再計算する
+    (armorers 使用有無に関わらず board 状態は効果ステージ中不変なので安全)。
+    """
+    def_sol = _soldier_cap(state, ctx, ctx.defender)
+    atk_bonus = 1 if def_sol == 0 else 0  # 無防備(4.3.3.II)
+    if ctx.attacker == FactionId.EYRIE and _eyrie_leader(state) == "commander":
+        atk_bonus += 1  # 司令官(7.8.3)
+    atk_hits = roll_att + atk_bonus + ctx.atk_extra_hits
+    def_hits = roll_def + ctx.def_extra_hits
+    return _push_allocations(state, ctx, atk_hits, def_hits)
+
+
+def battle_effects_options(state: GameState, dec: BattleEffectsDecision) -> List:
+    """BattleEffectsDecision の選択肢: 所有効果ごとの UseCraftedEffect + Skip。"""
+    is_attacker = dec.actor == dec.ctx.attacker
+    avail = _battle_effect_options(state, dec.actor, dec.ctx, is_attacker)
+    out: List = [SkipBattleEffects(player=dec.actor)]
+    for key in avail:
+        out.append(UseCraftedEffect(player=dec.actor, card_key=key))
+    return out
+
+
+def apply_battle_effect(state: GameState, action: UseCraftedEffect, rng) -> GameState:
+    """戦闘効果カードの使用(18.4)。BattleEffectsDecision への応答。"""
+    from .mechanics import discard_crafted_effect
+    dec = state.pending[-1]
+    assert isinstance(dec, BattleEffectsDecision)
+    ctx, roll_att, roll_def = dec.ctx, dec.roll_att, dec.roll_def
+    faction = action.player
+    key = action.card_key
+    is_attacker = faction == ctx.attacker
+
+    if key == "armorers":
+        # 自分が受けるロール由来ヒットを0にする(奇襲2ヒット・sappers/brutal は対象外)
+        state = discard_crafted_effect(state, faction, key)
+        if is_attacker:
+            roll_def = 0
+        else:
+            roll_att = 0
+    elif key == "sappers":
+        state = discard_crafted_effect(state, faction, key)
+        ctx = dataclasses.replace(ctx, def_extra_hits=ctx.def_extra_hits + 1)
+    elif key == "brutal-tactics":
+        # 破棄しない(毎戦闘使える)。防御側への追加1ヒット+防御側に1VP
+        ctx = dataclasses.replace(ctx, atk_extra_hits=ctx.atk_extra_hits + 1)
+        state = _award_vp(state, ctx.defender, 1)
+    else:
+        raise NotImplementedError("unknown battle effect %r" % (key,))
+
+    state = state.pop_pending()
+    if _battle_effect_options(state, faction, ctx, is_attacker):
+        return state.push_pending(BattleEffectsDecision(
+            actor=faction, ctx=ctx, roll_att=roll_att, roll_def=roll_def))
+    if is_attacker:
+        return _advance_to_defender_effects(state, ctx, roll_att, roll_def, rng)
+    return _finalize_battle_effects(state, ctx, roll_att, roll_def, rng)
+
+
+def apply_skip_battle_effects(state: GameState, action: SkipBattleEffects, rng) -> GameState:
+    """戦闘効果ステージのパス(18.4)。"""
+    dec = state.pending[-1]
+    assert isinstance(dec, BattleEffectsDecision)
+    ctx, roll_att, roll_def = dec.ctx, dec.roll_att, dec.roll_def
+    is_attacker = action.player == ctx.attacker
+    state = state.pop_pending()
+    if is_attacker:
+        return _advance_to_defender_effects(state, ctx, roll_att, roll_def, rng)
+    return _finalize_battle_effects(state, ctx, roll_att, roll_def, rng)
 
 
 # ---------------- エントリポイント(apply から呼ぶ) ----------------
@@ -273,6 +388,17 @@ def declare_battle(state: GameState, action: DeclareBattle, rng) -> GameState:
         if es.despot_awarded:
             state = state.with_faction_state(
                 dataclasses.replace(es, despot_awarded=False))
+    # 放浪部族の戦闘内損傷カウンタ(9.2.9.II.d 用の予約)を宣言時にリセット。
+    # command-warren(18.3)経由の宣言は apply_battle(9.5.2)を通らないためここで行う。
+    if _is_vagabond(state, ctx.attacker):
+        vs = state.vagabond()
+        if vs.damage_hits_this_battle:
+            state = state.with_faction_state(
+                dataclasses.replace(vs, damage_hits_this_battle=0))
+    # scouting-party(18.4): 攻撃側が所有していれば防御側の奇襲ステップを丸ごと
+    # スキップする(4.3.1に入らない)。破棄なし・毎戦闘有効。
+    if "scouting-party" in state.fs(ctx.attacker).crafted_effects:
+        return _roll_and_allocate(state, ctx, rng)
     if _matching_ambush(state, ctx.defender, ctx.clearing) is not None:
         return state.push_pending(AmbushDefenderDecision(actor=ctx.defender, ctx=ctx))
     return _roll_and_allocate(state, ctx, rng)

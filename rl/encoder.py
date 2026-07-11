@@ -51,6 +51,19 @@ _DECISION_TYPES: Tuple[str, ...] = (
     "OutrageDecision", "SupportersLimitDecision", "VagabondSetupCharacterDecision",
     "VagabondSetupForestDecision", "RefreshDecision", "ItemDamageDecision",
     "ItemLimitDecision", "MarquiseMarchDecision", "FieldHospitalDecision",
+    "BattleEffectsDecision", "CommandWarrenDecision", "CobblerMoveDecision",
+)
+
+#: 手元に置ける継続効果カードの base_id(DESIGN.md 18.1/18.5。multi-hot の順序)
+_PERSISTENT_KEYS: Tuple[str, ...] = (
+    "armorers", "sappers", "brutal-tactics", "scouting-party", "royal-claim",
+    "better-burrow-bank", "cobbler", "command-warren", "stand-and-deliver",
+    "tax-collector",
+)
+#: 「1ターン1回」系の使用済みフラグ対象(DESIGN.md 18.5)
+_ONCE_PER_TURN_KEYS: Tuple[str, ...] = (
+    "stand-and-deliver", "better-burrow-bank", "tax-collector",
+    "command-warren", "cobbler",
 )
 
 # 正規化スケール(概ね [0,1] に収める分母)。上界超過は describe 時に clip する。
@@ -100,7 +113,9 @@ class ObservationSpec:
         blocks["clearings"] = slice(clearings_start, cur)
         for fid in self.factions:
             # 共通(vp 1 + 手札 base_id カウント + soldiers_supply 1)+ 派閥固有
-            size = 1 + _N_CARD_BASE + 1 + len(DOMINANCE_BASE_IDS) + _faction_specific_size(fid, f)
+            size = (1 + _N_CARD_BASE + 1 + len(DOMINANCE_BASE_IDS)
+                    + _faction_specific_size(fid, f)
+                    + len(_PERSISTENT_KEYS) + len(_ONCE_PER_TURN_KEYS))
             blocks["faction_%s" % fid.value] = slice(cur, cur + size)
             cur += size
         self.blocks = blocks
@@ -189,6 +204,11 @@ class ObservationSpec:
             if 0 <= didx < len(SUITS):
                 drow[didx] = 1.0
             feats.extend(drow)
+            # 継続効果の手元カード+使用済みフラグ(DESIGN.md 18.5)
+            for key in _PERSISTENT_KEYS:
+                feats.append(1.0 if key in fs.crafted_effects else 0.0)
+            for key in _ONCE_PER_TURN_KEYS:
+                feats.append(1.0 if key in fs.effects_used else 0.0)
             # --- 派閥固有 ---
             if isinstance(fs, MarquiseState):
                 self._encode_marquise(feats, fs)

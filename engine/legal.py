@@ -15,6 +15,9 @@ from .actions import (
     AmbushAttackerDecision,
     AmbushChoice,
     AmbushDefenderDecision,
+    BattleEffectsDecision,
+    CobblerMoveDecision,
+    CommandWarrenDecision,
     DiscardCard,
     DiscardDecision,
     FieldHospitalDecision,
@@ -35,7 +38,8 @@ from .actions import (
     VagabondSetupCharacterDecision,
     VagabondSetupForestDecision,
 )
-from .battle import _matching_ambush, allocate_options
+from .battle import _matching_ambush, allocate_options, battle_effects_options
+from . import crafting as crafting_mod
 from .state import GameState
 from .types import Corner, FactionId, Phase, Suit
 
@@ -52,6 +56,9 @@ def legal_actions(state: GameState) -> List[Action]:
     # 派閥ロジックには足さず、ここで共通フックとして追加する(14.4)。
     if state.phase == Phase.DAYLIGHT:
         acts = list(acts) + _common_daylight_actions(state)
+    # 継続効果カードのフェイズ効果(鳥歌/昼光/夕闇, 18.3)。全フェイズ共通フック。
+    acts = list(acts) + crafting_mod.phase_effect_actions(
+        state, state.current_faction(), state.phase)
     return acts
 
 
@@ -158,6 +165,18 @@ def _decision_options(state: GameState) -> List[Action]:
     if isinstance(dec, AllocateHitsDecision):
         # ヒット割り振り(4.3.4)
         return allocate_options(state, dec)
+
+    if isinstance(dec, BattleEffectsDecision):
+        # 戦闘効果使用ステージ(4.3.3, 18.4)
+        return battle_effects_options(state, dec)
+
+    if isinstance(dec, CommandWarrenDecision):
+        # command-warren(18.3): 無消費の戦闘宣言候補
+        return crafting_mod.command_warren_options(state, dec)
+
+    if isinstance(dec, CobblerMoveDecision):
+        # cobbler(18.3): 無消費の移動候補
+        return crafting_mod.cobbler_move_options(state, dec.actor)
 
     if isinstance(dec, MarquiseMarchDecision):
         # 行軍の2移動目(6.5.2): 移動候補 + スキップ

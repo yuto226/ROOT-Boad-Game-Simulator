@@ -25,6 +25,7 @@ from typing import List, Optional, Tuple
 
 from ..actions import (
     Action,
+    CobblerMoveDecision,
     DeclareBattle,
     DiscardDecision,
     EndPhase,
@@ -627,9 +628,12 @@ class VagabondLogic(FactionLogic):
         return state
 
     def _birdsong(self, state: GameState, rng) -> GameState:
-        """鳥歌(9.4): 援助回数リセット・潜入フラグリセット → 回復(9.4.1)。"""
+        """鳥歌(9.4): 援助回数リセット・潜入フラグリセット → 回復(9.4.1)。
+
+        継続効果カードの1ターン1回使用済み(effects_used, 18.1)もここでリセット。
+        """
         vs = state.vagabond()
-        vs = replace(vs, aids_this_turn=(), slip_used=False)
+        vs = replace(vs, aids_this_turn=(), slip_used=False, effects_used=())
         state = state.with_faction_state(vs)
         vs = state.vagabond()
         cfg = state.board_defs["vagabond"]
@@ -735,7 +739,16 @@ def apply_slip(state: GameState, action: VagabondSlip, rng) -> GameState:
 
 
 def apply_move(state: GameState, action: VagabondMove, rng) -> GameState:
-    """移動(9.5.1)。M1(+敵対兵士のいる広場へは追加M1, 9.2.9.III.b)。蜂起なし。"""
+    """移動(9.5.1)。M1(+敵対兵士のいる広場へは追加M1, 9.2.9.III.b)。蜂起なし。
+
+    pending 先頭が ``CobblerMoveDecision`` なら cobbler(18.3)の無消費応答:
+    アイテムコストを払わずに放浪者コマを移動する。
+    """
+    if state.pending and isinstance(state.pending[-1], CobblerMoveDecision):
+        state = state.pop_pending()
+        vs = state.vagabond()
+        return state.with_faction_state(
+            replace(vs, pawn_clearing=action.dst, pawn_forest=None))
     vs = state.vagabond()
     need = 2 if _clearing_has_hostile_soldier(state, action.dst) else 1
     items = vs.items
@@ -871,17 +884,38 @@ def apply_repair(state: GameState, action: VagabondRepair, rng) -> GameState:
 
 
 def apply_craft_vagabond(state: GameState, action, rng) -> GameState:
-    """クラフト(9.5.8)。Hをコストシンボル数ぶん払い、アイテム獲得+VP。"""
+    """クラフト(9.5.8)。Hをコストシンボル数ぶん払う。
+
+    item はアイテム獲得+VP。persistent/immediate(18.2)は共通処理と同じ分岐
+    (手元へ配置 / Favor の即時除去)を、Hコスト支払いに置き換えて適用する。
+    """
+    from ..crafting import apply_favor_effect
     from ..mechanics import discard_card
     cdef = state.cards.get(action.card_id)
-    item = ItemKind(cdef.effect["item"])
-    vp = int(cdef.effect.get("vp", 0))
+    etype = cdef.effect.get("type")
     vs = state.vagabond()
     items = vs.items
     for _ in range(len(cdef.cost)):
         items = _pay(items, HAMMER)
-    items = _add_item(items, item.value)
     state = state.with_faction_state(replace(vs, items=items))
+
+    if etype == "persistent":
+        # 継続効果: 手札から手元へ(捨て山に行かない, 4.1.3)。VPなし(18.2)。
+        vs = state.vagabond()
+        hand = list(vs.hand)
+        hand.remove(action.card_id)
+        base = state.cards.base_id(action.card_id)
+        return state.with_faction_state(replace(
+            vs, hand=tuple(hand), crafted_effects=vs.crafted_effects + (base,)))
+    if etype == "immediate":
+        # Favor 三種(18.2): 動物種一致の全広場から敵の全コマを除去→捨て札
+        state = apply_favor_effect(state, VAGABOND, cdef, rng)
+        return discard_card(state, VAGABOND, action.card_id)
+
+    item = ItemKind(cdef.effect["item"])
+    vp = int(cdef.effect.get("vp", 0))
+    vs = state.vagabond()
+    state = state.with_faction_state(replace(vs, items=_add_item(vs.items, item.value)))
     # クラフトVP(3.2.2)は中央ヘルパ経由(VP凍結・非負, 14.2)
     state = award_vp(state, VAGABOND, vp)
     state = state.take_item(item)

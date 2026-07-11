@@ -65,6 +65,27 @@ class VagabondCoalition(Action):
     partner: FactionId
 
 
+# --- immediate/persistent クラフト効果(18.3 / 18.4) ---
+@dataclass(frozen=True)
+class UseCraftedEffect(Action):
+    """継続効果カードの使用(18.3 フェイズ効果 / 18.4 戦闘効果)。
+
+    ``card_key`` は base_id。フェイズ効果(royal-claim / stand-and-deliver /
+    better-burrow-bank / tax-collector / command-warren / cobbler)は
+    target_faction/target_clearing のうち該当するものを使う。戦闘効果
+    (armorers / sappers / brutal-tactics)はどちらも使わない。
+    """
+
+    card_key: str = ""
+    target_faction: Optional[FactionId] = None
+    target_clearing: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class SkipBattleEffects(Action):
+    """戦闘効果使用ステージ(18.4, 4.3.3)でのパス。"""
+
+
 # --- 猫野侯国固有(第6章) ---
 @dataclass(frozen=True)
 class MarquiseBuild(Action):
@@ -422,6 +443,12 @@ class BattleCtx:
     defender: FactionId
     clearing: int
     ambush_used: bool = False
+    #: 戦闘効果(4.3.3, 18.4)による追加ヒットの累計。ロール由来ヒット(armorers が
+    #: 軽減できる対象)とは別勘定にし、armorers 使用後も減らない。
+    #: atk_extra_hits=攻撃側が与える追加(brutal-tactics)、
+    #: def_extra_hits=防御側が与える追加(sappers)。
+    atk_extra_hits: int = 0
+    def_extra_hits: int = 0
 
 
 @dataclass(frozen=True)
@@ -467,6 +494,35 @@ class AllocateHitsDecision(Decision):
     ctx: BattleCtx = None
     roll_after: bool = False
     removed_soldiers: int = 0
+
+
+@dataclass(frozen=True)
+class BattleEffectsDecision(Decision):
+    """戦闘効果使用ステージ(4.3.3, 18.4)。actor=その側(攻撃側→防御側の固定順)。
+
+    ``roll_att``/``roll_def`` はロール由来ヒット(4.3.2、出目上限キャップ済み)。
+    armorers はこの値を0にできる。無防備/司令官のボーナスおよび
+    sappers/brutal-tactics の追加ヒットは軽減対象外で、``ctx.atk_extra_hits``/
+    ``def_extra_hits`` と finalize 時の再計算(_finalize_battle_effects)で扱う。
+    """
+
+    ctx: BattleCtx = None
+    roll_att: int = 0
+    roll_def: int = 0
+
+
+@dataclass(frozen=True)
+class CommandWarrenDecision(Decision):
+    """command-warren(18.3): 無消費の戦闘宣言機会。actor=カード所有派閥。
+    合法手=通常の DeclareBattle 候補(候補が必ず1つ以上ある前提, キャンセル肢なし)。
+    """
+
+
+@dataclass(frozen=True)
+class CobblerMoveDecision(Decision):
+    """cobbler(18.3): 無消費の移動機会。actor=カード所有派閥。
+    合法手=通常の移動候補(候補が必ず1つ以上ある前提, キャンセル肢なし)。
+    """
 
 
 @dataclass(frozen=True)

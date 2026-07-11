@@ -295,7 +295,10 @@ class EyrieLogic(FactionLogic):
     # -- フェイズ開始の強制処理 --
     def begin_phase(self, state: GameState, rng) -> GameState:
         if state.phase == Phase.BIRDSONG:
-            return self._birdsong(state, rng)
+            state = self._birdsong(state, rng)
+            # 継続効果カードの1ターン1回使用済み(effects_used, 18.1)をリセット。
+            return state.with_faction_state(dataclasses.replace(
+                state.eyrie(), effects_used=()))
         if state.phase == Phase.DAYLIGHT:
             es = state.eyrie()
             return state.with_faction_state(dataclasses.replace(

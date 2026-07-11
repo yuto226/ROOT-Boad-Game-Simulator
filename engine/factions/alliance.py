@@ -401,6 +401,10 @@ class AllianceLogic(FactionLogic):
 
     def begin_phase(self, state: GameState, rng) -> GameState:
         als = state.alliance()
+        if state.phase == Phase.BIRDSONG:
+            # 鳥歌(8.4)は反乱・支持拡大とも任意で強制処理なし。継続効果カードの
+            # 1ターン1回使用済み(effects_used, 18.1)のみリセットする。
+            return state.with_faction_state(dataclasses.replace(als, effects_used=()))
         if state.phase == Phase.DAYLIGHT:
             # クラフトツール(支持トークン)の起動記録をリセット(4.1.1)
             return state.with_faction_state(
@@ -409,7 +413,6 @@ class AllianceLogic(FactionLogic):
             # 作戦行動の進行状態をリセット(8.6)
             return state.with_faction_state(
                 dataclasses.replace(als, ops_used=0, ops_done=False))
-        # 鳥歌(8.4)は強制処理なし(反乱・支持拡大はどちらも任意)
         return state
 
     def legal_actions(self, state: GameState) -> List[Action]:

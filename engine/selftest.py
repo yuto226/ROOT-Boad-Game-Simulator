@@ -22,6 +22,10 @@ from .actions import (
     AllocateHitsDecision,
     AmbushChoice,
     AmbushDefenderDecision,
+    BattleEffectsDecision,
+    CobblerMoveDecision,
+    CommandWarrenDecision,
+    CraftCard,
     DeclareBattle,
     DiscardCard,
     DiscardDecision,
@@ -29,16 +33,20 @@ from .actions import (
     EyrieChooseCorner,
     EyrieChooseLeader,
     EyrieTurmoil,
+    FieldHospitalDecision,
     ItemDamageDecision,
     ItemLimitDecision,
+    MarquiseFieldHospital,
     MarquiseMarch,
     MarquiseMarchDecision,
     MarquiseSkipMove,
     OutrageDecision,
     OutragePay,
     SetupChooseKeep,
+    SkipBattleEffects,
     SupportersLimitDecision,
     TakeDominance,
+    UseCraftedEffect,
     VagabondAid,
     VagabondBattle,
     VagabondChooseCharacter,
@@ -50,6 +58,7 @@ from .actions import (
 )
 from .apply import apply
 from .battle import remove_piece
+from .crafting import legal_crafts
 from .game import check_dominance_victory, new_game
 from .legal import legal_actions
 from .mechanics import award_vp, to_discard
@@ -58,6 +67,7 @@ from .types import (
     B_BASE,
     B_ROOST,
     B_SAWMILL,
+    B_WORKSHOP,
     Corner,
     FactionId,
     ItemKind,
@@ -66,6 +76,7 @@ from .types import (
     Piece,
     Suit,
     T_SYMPATHY,
+    T_WOOD,
 )
 
 M = FactionId.MARQUISE
@@ -1010,6 +1021,398 @@ def test_dominance_card_conservation() -> None:
           % (doms[0], doms[1]))
 
 
+# ---------------- ルール完全性C: immediate/persistent クラフト効果(18章) ----------------
+def _strip_ambush(state: GameState, faction: FactionId) -> GameState:
+    """手札から奇襲カードを除き通常ロールに固定する(既存テストと同手法)。"""
+    fs = state.fs(faction)
+    hand = tuple(c for c in fs.hand if not state.cards.get(c).is_ambush)
+    return state.with_faction_state(dataclasses.replace(fs, hand=hand))
+
+
+def _extract_card(state: GameState, base_id: str) -> GameState:
+    """base_id のカード1枚を山札/手札/捨て山のどこかから抜き取る。
+
+    テストで手札や crafted_effects に直置きするカードの複製を相殺し、
+    カード保存則(9.4.4)を保つ(セットアップで配られた位置に依存しない)。
+    """
+    for cid in state.deck:
+        if state.cards.base_id(cid) == base_id:
+            deck = list(state.deck)
+            deck.remove(cid)
+            return state.replace(deck=tuple(deck))
+    for fs in state.faction_states:
+        for cid in fs.hand:
+            if state.cards.base_id(cid) == base_id:
+                hand = list(fs.hand)
+                hand.remove(cid)
+                return state.with_faction_state(
+                    dataclasses.replace(fs, hand=tuple(hand)))
+    for cid in state.discard:
+        if state.cards.base_id(cid) == base_id:
+            disc = list(state.discard)
+            disc.remove(cid)
+            return state.replace(discard=tuple(disc))
+    raise AssertionError("card %s not found in deck/hands/discard" % base_id)
+
+
+def _validate_cards(state: GameState) -> None:
+    """_setup_two_faction ベースの状態で validate() を呼ぶ前処理。
+
+    手動シナリオはダミーの建物で広場1の枠を溢れさせ、猫兵士も直置きしている
+    (枠/兵士総数不変量の対象外のテスト用配置)。それらを補正してから
+    カード保存則(9.4.4)込みの validate() を通す(本題は crafted_effects の勘定)。
+    """
+    from .state import MAX_SOLDIERS
+    cs = state.clearing(1)
+    for p in cs.buildings_of(D):
+        cs = cs.remove_building(p)
+    state = state.with_clearing(cs)
+    board = sum(c.soldier_count(M) for c in state.clearings)
+    fs = state.fs(M)
+    supply = min(fs.soldiers_supply, MAX_SOLDIERS[M] - board)
+    state = state.with_faction_state(dataclasses.replace(fs, soldiers_supply=supply))
+    state.validate()
+
+
+def test_craft_persistent() -> None:
+    """(a) persistentクラフト: 手元に置かれVPなし・捨て山に行かない・
+    同名2枚目はクラフト不可(4.1.4, 18.2)。"""
+    rng = random.Random(201)
+    state = _setup_two_faction(rng)
+    state = state.replace(phase=Phase.DAYLIGHT)
+    # fox広場6に工房を置き armorers(コスト fox)を支払えるようにする
+    state = _clear(state, 6)
+    state = state.with_clearing(state.clearing(6).add_building(Piece(M, B_WORKSHOP)))
+    # armorers 2枚を山札から手札へ(カード保存則を保つ)
+    state = _extract_card(state, "armorers")
+    state = _extract_card(state, "armorers")
+    fs = state.fs(M)
+    state = _set_fs(state, M, hand=fs.hand + ("armorers#0", "armorers#1"))
+
+    crafts = [a for a in legal_actions(state) if isinstance(a, CraftCard)
+              and state.cards.base_id(a.card_id) == "armorers"]
+    assert len(crafts) == 1, "base_id で dedup された1候補のみ: %r" % crafts
+    vp_before = state.fs(M).vp
+    discard_before = len(state.discard)
+    state = apply(state, crafts[0], rng)
+    ms = state.fs(M)
+    assert ms.crafted_effects == ("armorers",), "手元に base_id で配置(4.1.3)"
+    assert ms.vp == vp_before, "persistent クラフトは VP なし(18.2)"
+    assert len(state.discard) == discard_before, "捨て山に行かない(4.1.3)"
+    assert "armorers#1" in ms.hand and "armorers#0" not in ms.hand
+    _validate_cards(state)  # カード保存則が crafted_effects 込みで成立
+
+    # 同名2枚目: 工房未使用に戻してもクラフト候補に出ない(4.1.4)
+    state = _set_fs(state, M, workshop_used=False)
+    assert not any(state.cards.base_id(a.card_id) == "armorers"
+                   for a in legal_crafts(state, M)), "同名2枚目は不可(4.1.4)"
+    print("  persistent craft: to hand-area, no VP, no discard, duplicate banned")
+
+
+def test_craft_favor() -> None:
+    """(b) Favor: 対象suit全広場の敵全コマ除去+建物/トークンVP+猫野戦病院(18.2)。"""
+    rng = random.Random(202)
+    state = _setup_marquise_alliance(rng)  # 猫城砦NW(fox広場0は無傷で残る)
+    aidx = state.factions.index(A)
+    # mouse広場(2,3,5,10)を全消去し、2,3,5 に連合の支持トークン=クラフトツール
+    # 3個を置く(favor-of-the-mice のコスト mouse×3)
+    for cid in (2, 3, 5, 10):
+        state = _clear(state, cid)
+    for cid in (2, 3, 5):
+        state = state.with_clearing(state.clearing(cid).add_token(Piece(A, T_SYMPATHY)))
+    state = _set_alliance(state, placed_sympathy=3)
+    # mouse広場2: 猫兵士2+製材所+木材 / mouse広場3: 猫兵士1
+    cs = state.clearing(2).add_soldiers(M, 2).add_building(Piece(M, B_SAWMILL))
+    cs = cs.add_token(Piece(M, T_WOOD))
+    state = state.with_clearing(cs)
+    state = state.with_clearing(state.clearing(3).add_soldiers(M, 1))
+    # 猫の手札=鳥カード1枚(ワイルド 2.1.1 → 野戦病院の支払いに使える)
+    bird = _cards_of_suit(state, Suit.BIRD, 1)[0]
+    state = _set_fs(state, M, hand=(bird,))
+    state = _set_fs(state, A, hand=("favor-of-the-mice",))
+    state = state.replace(turn_index=aidx, phase=Phase.DAYLIGHT)
+
+    crafts = [a for a in legal_actions(state) if isinstance(a, CraftCard)]
+    assert any(state.cards.base_id(a.card_id) == "favor-of-the-mice" for a in crafts), \
+        "支持トークン mouse×3 で Favor がクラフト可能"
+    a_vp = state.fs(A).vp
+    keep_before = state.clearing(0).soldier_count(M)
+    act = [a for a in crafts if state.cards.base_id(a.card_id) == "favor-of-the-mice"][0]
+    state = apply(state, act, rng)
+
+    for cid in (2, 3):
+        cs = state.clearing(cid)
+        assert cs.soldier_count(M) == 0 and not cs.buildings_of(M) \
+            and not cs.tokens_of(M), "mouse広場%dから猫の全コマ除去" % cid
+    assert state.fs(A).vp == a_vp + 2, "建物1+トークン1の除去VP(3.2.1)"
+    assert "favor-of-the-mice" in state.discard, "immediate は使用後に捨て札(4.1.2)"
+    # 野戦病院: 広場ごとに1イベント → デシジョン2個(広場3が先頭)
+    hospitals = [d for d in state.pending if isinstance(d, FieldHospitalDecision)]
+    assert len(hospitals) == 2, "広場2と3で個別に病院判定(15.3): %r" % (state.pending,)
+    top = state.pending[-1]
+    assert top.clearing == 3 and top.count == 1
+    # 広場3のぶんを鳥カードで支払い → 城砦広場0に1個出現
+    state = apply(state, MarquiseFieldHospital(player=M, card_id=bird), rng)
+    assert state.clearing(0).soldier_count(M) == keep_before + 1, "城砦広場へ配置(6.2.3)"
+    # 手札が尽きたので広場2のぶんは None のみ
+    opts = legal_actions(state)
+    assert opts == [MarquiseFieldHospital(player=M, card_id=None)], \
+        "一致カードなし → 使わない選択肢のみ: %r" % opts
+    state = apply(state, opts[0], rng)
+    assert not state.pending
+    print("  favor: mouse clearings swept, +2 VP, hospital fired per clearing")
+
+
+def test_royal_claim() -> None:
+    """(c) Royal Claim: 支配広場数ぶんVP+手元から捨て山へ(18.3)。"""
+    rng = random.Random(203)
+    state = _setup_two_faction(rng)  # phase=BIRDSONG, turn=M
+    state = _extract_card(state, "royal-claim")
+    state = _set_fs(state, M, crafted_effects=("royal-claim",))
+    ruled = sum(1 for cs in state.clearings if state.controls(M, cs.cid))
+    assert ruled > 0
+
+    acts = [a for a in legal_actions(state) if isinstance(a, UseCraftedEffect)]
+    assert acts == [UseCraftedEffect(player=M, card_key="royal-claim")], repr(acts)
+    vp_before = state.fs(M).vp
+    state = apply(state, acts[0], rng)
+    assert state.fs(M).vp == vp_before + ruled, "支配広場数ぶんVP"
+    assert state.fs(M).crafted_effects == () and "royal-claim" in state.discard, \
+        "使い切り → 捨て山へ(to_discard 経由)"
+    assert not any(isinstance(a, UseCraftedEffect) for a in legal_actions(state))
+    _validate_cards(state)
+    print("  royal claim: +%d VP (ruled clearings), card discarded" % ruled)
+
+
+def test_battle_effects() -> None:
+    """(d) 戦闘効果: brutal-tactics の追加ヒット+防御側1VP、sappers の追加ヒット、
+    armorers のロール由来ヒット相殺(追加ヒットは軽減されない, 18.4)。"""
+    rng = random.Random(204)
+    state = _setup_two_faction(rng)
+    state = _strip_ambush(state, D)
+    state = _set_fs(state, M, hand=(), crafted_effects=("brutal-tactics",))
+    state = _set_fs(state, D, crafted_effects=("sappers", "armorers"))
+
+    state = apply(state, DeclareBattle(player=M, clearing=1, defender=D), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, BattleEffectsDecision) and dec.actor == M, \
+        "効果ステージは攻撃側から(18.4): %r" % (state.pending,)
+    roll_att, roll_def = dec.roll_att, dec.roll_def
+    acts = legal_actions(state)
+    assert SkipBattleEffects(player=M) in acts
+    assert UseCraftedEffect(player=M, card_key="brutal-tactics") in acts
+
+    d_vp = state.fs(D).vp
+    state = apply(state, UseCraftedEffect(player=M, card_key="brutal-tactics"), rng)
+    assert state.fs(D).vp == d_vp + 1, "brutal-tactics: 防御側に1VP"
+    assert state.fs(M).crafted_effects == ("brutal-tactics",), "brutal は破棄しない"
+    dec = state.pending[-1]
+    assert isinstance(dec, BattleEffectsDecision) and dec.actor == D, "防御側の番"
+
+    state = apply(state, UseCraftedEffect(player=D, card_key="sappers"), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, BattleEffectsDecision) and dec.actor == D, \
+        "残り効果(armorers)があるので再push"
+    state = apply(state, UseCraftedEffect(player=D, card_key="armorers"), rng)
+    assert state.fs(D).crafted_effects == (), "sappers/armorers は使用時に手放す"
+    assert "sappers" in state.discard and "armorers" in state.discard
+
+    allocs = {d.victim: d for d in state.pending if isinstance(d, AllocateHitsDecision)}
+    assert allocs[D].hits == 1, (
+        "armorers でロール由来(%d)を0に、brutal の追加1のみ残る: %r"
+        % (roll_att, allocs[D]))
+    assert allocs[M].hits == roll_def + 1, (
+        "攻撃側の受けはロール%d+sappers1: %r" % (roll_def, allocs[M]))
+    steps = 0
+    while state.pending:
+        steps += 1
+        assert steps < 50
+        state = apply(state, legal_actions(state)[0], rng)
+    print("  battle effects: brutal +1hit/+1VP(def), sappers +1hit, "
+          "armorers zeroed rolled %d (extras kept)" % roll_att)
+
+
+def test_scouting_party() -> None:
+    """(e) scouting-party: 攻撃側所有で防御側の奇襲ステップを丸ごとスキップ(18.4)。"""
+    rng = random.Random(205)
+    base = _setup_two_faction(rng)
+    # 広場1と一致する奇襲カードをDの手札に注入
+    suit = base.map.clearing(1).suit
+    ambush_id = next(d.id for d in base.cards.defs if d.is_ambush and d.suit == suit)
+    dfs = base.fs(D)
+    base = base.with_faction_state(dataclasses.replace(dfs, hand=dfs.hand + (ambush_id,)))
+    base = _set_fs(base, M, hand=())
+
+    # 対照: scouting-party なし → 奇襲デシジョンが出る
+    s1 = apply(base, DeclareBattle(player=M, clearing=1, defender=D), rng)
+    assert isinstance(s1.pending[-1], AmbushDefenderDecision), "通常は奇襲機会(4.3.1)"
+
+    # scouting-party あり → 奇襲ステップに入らず即ロール
+    s2 = _set_fs(base, M, crafted_effects=("scouting-party",))
+    s2 = apply(s2, DeclareBattle(player=M, clearing=1, defender=D), rng)
+    assert not any(isinstance(d, AmbushDefenderDecision) for d in s2.pending), \
+        "奇襲ステップをスキップ(18.4): %r" % (s2.pending,)
+    assert s2.pending and all(isinstance(d, AllocateHitsDecision) for d in s2.pending)
+    assert "scouting-party" in s2.fs(M).crafted_effects, "破棄なし・毎戦闘有効"
+    print("  scouting party: ambush step skipped, card retained")
+
+
+def test_tax_collector() -> None:
+    """(f) tax-collector: 自兵士1除去(野戦病院イベント)+1ドロー・1ターン1回(18.3)。"""
+    rng = random.Random(206)
+    state = _setup_two_faction(rng)
+    state = state.replace(phase=Phase.DAYLIGHT)
+    state = _extract_card(state, "tax-collector")
+    state = _set_fs(state, M, hand=(), crafted_effects=("tax-collector",))
+
+    acts = [a for a in legal_actions(state) if isinstance(a, UseCraftedEffect)]
+    soldier_cids = [cs.cid for cs in state.clearings if cs.soldier_count(M) > 0]
+    assert {a.target_clearing for a in acts} == set(soldier_cids), \
+        "自兵士のいる広場ごとに候補: %r" % acts
+    supply_before = state.fs(M).soldiers_supply
+    before = state.clearing(1).soldier_count(M)
+    state = apply(state, UseCraftedEffect(player=M, card_key="tax-collector",
+                                          target_clearing=1), rng)
+    assert state.clearing(1).soldier_count(M) == before - 1, "兵士1除去"
+    assert state.fs(M).soldiers_supply == supply_before + 1, "除去兵士はサプライへ(3.5)"
+    assert len(state.fs(M).hand) == 1, "1ドロー"
+    assert "tax-collector" in state.fs(M).effects_used, "使用済み記録(1ターン1回)"
+    assert not state.pending, "除去イベント時点で手札なし → 病院デシジョンは出ない"
+    assert not any(isinstance(a, UseCraftedEffect) for a in legal_actions(state)), \
+        "同一ターン2回目は不可"
+
+    # 病院パス: 除去イベント時点で一致カード(鳥=ワイルド)があればデシジョンが出る
+    s2 = _setup_two_faction(rng)
+    s2 = s2.replace(phase=Phase.DAYLIGHT)
+    bird = _cards_of_suit(s2, Suit.BIRD, 1)[0]
+    s2 = _set_fs(s2, M, hand=(bird,), crafted_effects=("tax-collector",))
+    s2 = apply(s2, UseCraftedEffect(player=M, card_key="tax-collector",
+                                    target_clearing=1), rng)
+    dec = s2.pending[-1]
+    assert isinstance(dec, FieldHospitalDecision) and dec.count == 1, \
+        "猫兵士除去イベント → 野戦病院(6.2.3): %r" % (s2.pending,)
+    s2 = apply(s2, MarquiseFieldHospital(player=M, card_id=None), rng)
+    assert not s2.pending
+    print("  tax collector: -1 soldier, +1 card, once per turn, hospital fired")
+
+
+def test_command_warren() -> None:
+    """(g-1) command-warren: アクション消費なしの戦闘宣言(18.3)。"""
+    rng = random.Random(207)
+    state = _setup_two_faction(rng)
+    state = _strip_ambush(state, D)
+    state = state.replace(phase=Phase.DAYLIGHT)
+    state = _extract_card(state, "command-warren")
+    state = _set_fs(state, M, hand=(), crafted_effects=("command-warren",),
+                    actions_left=0)
+
+    acts = legal_actions(state)
+    assert not any(isinstance(a, DeclareBattle) for a in acts), "アクション0で通常戦闘不可"
+    use = UseCraftedEffect(player=M, card_key="command-warren")
+    assert use in acts, "戦闘候補あり → command-warren 合法: %r" % acts
+    state = apply(state, use, rng)
+    assert isinstance(state.pending[-1], CommandWarrenDecision)
+    assert "command-warren" in state.fs(M).effects_used
+
+    battles = legal_actions(state)
+    assert battles and all(isinstance(a, DeclareBattle) for a in battles), \
+        "選択肢=通常の戦闘宣言候補のみ(キャンセル肢なし): %r" % battles
+    target = [a for a in battles if a.clearing == 1 and a.defender == D][0]
+    state = apply(state, target, rng)
+    assert state.fs(M).actions_left == 0, "アクション消費なし(18.3)"
+    steps = 0
+    while state.pending:
+        steps += 1
+        assert steps < 50
+        state = apply(state, legal_actions(state)[0], rng)
+    assert "command-warren" in state.fs(M).crafted_effects, "カードは手元に残る"
+    print("  command warren: free battle declared, no action spent")
+
+
+def test_cobbler() -> None:
+    """(g-2) cobbler: 夕闇のアクション消費なし移動+鳥歌での使用済みリセット(18.3)。"""
+    rng = random.Random(208)
+    state = _setup_two_faction(rng)
+    state = state.replace(phase=Phase.EVENING)
+    state = _extract_card(state, "cobbler")
+    state = _set_fs(state, M, hand=(), crafted_effects=("cobbler",))
+
+    acts = legal_actions(state)
+    use = UseCraftedEffect(player=M, card_key="cobbler")
+    assert use in acts and EndPhase(player=M) in acts, repr(acts)
+    state = apply(state, use, rng)
+    assert isinstance(state.pending[-1], CobblerMoveDecision)
+
+    moves = legal_actions(state)
+    assert moves and all(isinstance(a, MarquiseMarch) for a in moves), \
+        "選択肢=通常の移動候補: %r" % moves
+    mv = [a for a in moves if a.src == 1 and a.dst == 0 and a.count == 1][0]
+    before_src = state.clearing(1).soldier_count(M)
+    before_dst = state.clearing(0).soldier_count(M)
+    state = apply(state, mv, rng)
+    assert state.clearing(1).soldier_count(M) == before_src - 1
+    assert state.clearing(0).soldier_count(M) == before_dst + 1
+    assert not state.pending, "1回移動のみ(MarquiseMarchDecision は積まれない)"
+    assert "cobbler" in state.fs(M).effects_used
+
+    # 自ターンの鳥歌 begin_phase で使用済みがリセットされる(18.1)
+    from .factions import get_logic
+    reset = get_logic(M).begin_phase(state.replace(phase=Phase.BIRDSONG), rng)
+    assert reset.fs(M).effects_used == (), "鳥歌開始で effects_used リセット"
+    print("  cobbler: free move in evening, effects_used reset at birdsong")
+
+
+def test_stand_and_deliver() -> None:
+    """(h) stand-and-deliver: 敵手札から rng で1枚奪取+相手に1VP(18.3)。"""
+    rng = random.Random(209)
+    state = _setup_two_faction(rng)  # phase=BIRDSONG, turn=M
+    state = _extract_card(state, "stand-and-deliver")
+    state = _set_fs(state, M, crafted_effects=("stand-and-deliver",))
+    assert state.fs(D).hand, "前提: ダミーの手札が1枚以上"
+
+    acts = [a for a in legal_actions(state) if isinstance(a, UseCraftedEffect)]
+    assert acts == [UseCraftedEffect(player=M, card_key="stand-and-deliver",
+                                     target_faction=D)], repr(acts)
+    m_hand = len(state.fs(M).hand)
+    d_hand = set(state.fs(D).hand)
+    d_vp = state.fs(D).vp
+    state = apply(state, acts[0], rng)
+    assert len(state.fs(M).hand) == m_hand + 1 and len(state.fs(D).hand) == len(d_hand) - 1
+    gained = set(state.fs(M).hand) & d_hand
+    assert len(gained) == 1, "元のD手札の1枚がMの手札へ: %r" % (gained,)
+    assert set(state.fs(D).hand) == d_hand - gained, "Dの手札から奪取分だけ消える"
+    assert state.fs(D).vp == d_vp + 1, "対象に1VP"
+    assert "stand-and-deliver" in state.fs(M).effects_used
+    assert "stand-and-deliver" in state.fs(M).crafted_effects, "カードは手元に残る"
+    assert not any(isinstance(a, UseCraftedEffect) for a in legal_actions(state)), \
+        "1ターン1回"
+    _validate_cards(state)
+    print("  stand and deliver: stole 1 card, target +1 VP, once per turn")
+
+
+def test_better_burrow_bank() -> None:
+    """(i) better-burrow-bank: 自分1ドロー→対象敵1ドロー(18.3)。"""
+    rng = random.Random(210)
+    state = _setup_two_faction(rng)  # phase=BIRDSONG, turn=M
+    state = _extract_card(state, "better-burrow-bank")
+    state = _set_fs(state, M, crafted_effects=("better-burrow-bank",))
+
+    acts = [a for a in legal_actions(state) if isinstance(a, UseCraftedEffect)]
+    assert acts == [UseCraftedEffect(player=M, card_key="better-burrow-bank",
+                                     target_faction=D)], repr(acts)
+    m_hand = len(state.fs(M).hand)
+    d_hand = len(state.fs(D).hand)
+    deck = len(state.deck)
+    state = apply(state, acts[0], rng)
+    assert len(state.fs(M).hand) == m_hand + 1 and len(state.fs(D).hand) == d_hand + 1, \
+        "双方1ドロー"
+    assert len(state.deck) == deck - 2
+    assert "better-burrow-bank" in state.fs(M).effects_used
+    assert "better-burrow-bank" in state.fs(M).crafted_effects
+    _validate_cards(state)
+    print("  better burrow bank: both drew 1 (self first), once per turn")
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
@@ -1057,6 +1460,26 @@ def main() -> int:
     test_coalition()
     print("selftest: dominance card conservation (validate)")
     test_dominance_card_conservation()
+    print("selftest: persistent craft (4.1.3/4.1.4, 18.2)")
+    test_craft_persistent()
+    print("selftest: favor immediate craft (18.2)")
+    test_craft_favor()
+    print("selftest: royal claim (18.3)")
+    test_royal_claim()
+    print("selftest: battle effects (4.3.3, 18.4)")
+    test_battle_effects()
+    print("selftest: scouting party (18.4)")
+    test_scouting_party()
+    print("selftest: tax collector (18.3)")
+    test_tax_collector()
+    print("selftest: command warren (18.3)")
+    test_command_warren()
+    print("selftest: cobbler (18.3)")
+    test_cobbler()
+    print("selftest: stand and deliver (18.3)")
+    test_stand_and_deliver()
+    print("selftest: better burrow bank (18.3)")
+    test_better_burrow_bank()
     print("OK")
     return 0
 

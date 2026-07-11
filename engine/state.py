@@ -136,7 +136,14 @@ class FactionState:
     faction: FactionId
     vp: int = 0
     hand: Tuple[str, ...] = ()
-    crafted_cards: Tuple[str, ...] = ()   # 手元の継続効果カード(4.1.3)
+    #: 手元の継続効果カード(immediate/persistent クラフト効果, 4.1.3/18.1)。
+    #: 要素は base_id(コピー枚数の区別は落とす。クラフト時にカードは手札から
+    #: 出て捨て山に行かない)。重複禁止(4.1.4)は crafting.legal_crafts が強制。
+    crafted_effects: Tuple[str, ...] = ()
+    #: 「1ターン1回」系の継続効果カードの使用済み base_id(18.1)。stand-and-deliver
+    #: / better-burrow-bank / tax-collector / command-warren / cobbler が対象。
+    #: 自ターンの鳥歌 begin_phase でリセット(既存の潜入リセットと同じ場所)。
+    effects_used: Tuple[str, ...] = ()
     items: Tuple[ItemKind, ...] = ()      # 作成済みアイテム
     soldiers_supply: int = 0              # サプライにある兵士コマ数
     #: 発動して手元に公開中の圧倒カードID(3.3.1/3.3.2)。None→非Noneの一方向。
@@ -496,7 +503,7 @@ class GameState:
         # 圧倒カードの2ゾーン(3.3.2 公開中 / 3.3.3 盤脇)を勘定に加える(14.1)
         count += len(self.dominance_aside)
         for fs in self.faction_states:
-            count += len(fs.hand) + len(fs.crafted_cards)
+            count += len(fs.hand) + len(fs.crafted_effects)
             if fs.dominance_card is not None:
                 count += 1
         if FactionId.ALLIANCE in self.factions:

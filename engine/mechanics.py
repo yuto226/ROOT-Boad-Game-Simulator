@@ -72,3 +72,15 @@ def discard_card(state: GameState, faction: FactionId, card_id: str) -> GameStat
     hand.remove(card_id)
     new_fs = dataclasses.replace(fs, hand=tuple(hand))
     return to_discard(state.with_faction_state(new_fs), card_id)
+
+
+def discard_crafted_effect(state: GameState, faction: FactionId, key: str) -> GameState:
+    """手元(crafted_effects)の継続効果カード1枚を base_id 一致で外し、
+    to_discard 経由で捨て山/盤脇へ送る(4.1.3 のカードを手放す共通処理, 18.2/18.4)。
+    royal-claim(使い切り)・armorers/sappers(使用時に捨て山へ)から呼ばれる。
+    """
+    fs = state.fs(faction)
+    lst = list(fs.crafted_effects)
+    lst.remove(key)
+    state = state.with_faction_state(dataclasses.replace(fs, crafted_effects=tuple(lst)))
+    return to_discard(state, key)

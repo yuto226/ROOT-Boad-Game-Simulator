@@ -26,6 +26,9 @@ from .actions import (
     AmbushAttackerDecision,
     AmbushChoice,
     AmbushDefenderDecision,
+    BattleEffectsDecision,
+    CobblerMoveDecision,
+    CommandWarrenDecision,
     CraftCard,
     DeclareBattle,
     DiscardCard,
@@ -55,7 +58,9 @@ from .actions import (
     OutragePay,
     RefreshDecision,
     SetupChooseKeep,
+    SkipBattleEffects,
     TakeDominance,
+    UseCraftedEffect,
     VagabondAid,
     VagabondBattle,
     VagabondCoalition,
@@ -255,20 +260,38 @@ def _apply_march(state: GameState, action: MarquiseMarch, rng) -> GameState:
     ``MarquiseMarchDecision`` を積んでから移動を実行する(移動が蜂起 8.2.6 の
     ``OutrageDecision`` を積む場合、それがスタック上に載り先に解決される。push順が
     重要, 15.2)。
+
+    pending 先頭が ``CobblerMoveDecision`` なら cobbler(18.3)の無消費の1回移動
+    として応答する。MarquiseMarch を全派閥共通の「1回移動」アクションとして
+    流用する(action_key は player を見ないため rl/catalog.py の変更は不要)。
     """
+    if state.pending and isinstance(state.pending[-1], CobblerMoveDecision):
+        state = state.pop_pending()
+        return _execute_soldier_move(
+            state, action.player, action.src, action.dst, action.count, rng)
     if state.pending and isinstance(state.pending[-1], MarquiseMarchDecision):
         state = state.pop_pending()  # 2移動目: アクション消費なし
     else:
         state = _spend_action(state)  # 1移動目: アクション1消費
         state = state.push_pending(MarquiseMarchDecision(actor=FactionId.MARQUISE))
-    src = state.clearing(action.src)
-    assert src.soldier_count(FactionId.MARQUISE) >= action.count
-    state = state.with_clearing(src.add_soldiers(FactionId.MARQUISE, -action.count))
-    dst = state.clearing(action.dst).add_soldiers(FactionId.MARQUISE, action.count)
+    return _execute_soldier_move(
+        state, FactionId.MARQUISE, action.src, action.dst, action.count, rng)
+
+
+def _execute_soldier_move(state: GameState, faction: FactionId, src_cid: int,
+                          dst_cid: int, count: int, rng) -> GameState:
+    """兵士移動の実行(4.2)+支持広場移動での蜂起判定(8.2.6)。
+
+    猫の行軍・cobbler(18.3)の無消費移動から呼ばれる汎用ヘルパ。
+    """
+    src = state.clearing(src_cid)
+    assert src.soldier_count(faction) >= count
+    state = state.with_clearing(src.add_soldiers(faction, -count))
+    dst = state.clearing(dst_cid).add_soldiers(faction, count)
     state = state.with_clearing(dst)
-    # 支持広場への兵士移動 → 蜂起(8.2.6)。連合不参加/非支持広場なら no-op
-    state = alliance_mod.outrage_on_move(state, FactionId.MARQUISE, action.dst, rng)
-    return state
+    # 支持広場への兵士移動 → 蜂起(8.2.6)。連合不参加/非支持広場/移動元が連合
+    # 自身なら outrage_on_move 内部で no-op(alliance.outrage_on_move の実装参照)。
+    return alliance_mod.outrage_on_move(state, faction, dst_cid, rng)
 
 
 def _apply_skip_move(state: GameState, action: MarquiseSkipMove, rng) -> GameState:
@@ -321,8 +344,13 @@ def _apply_play_bird(state: GameState, action: MarquisePlayBirdCard, rng) -> Gam
 
 # ---------------- 戦闘(4.3)/デシジョン応答 ----------------
 def _apply_declare_battle(state: GameState, action: DeclareBattle, rng) -> GameState:
+    """戦闘宣言(4.3)。command-warren(18.3)の応答時はアクションを消費しない。"""
+    is_command_warren = bool(state.pending) and isinstance(
+        state.pending[-1], CommandWarrenDecision)
+    if is_command_warren:
+        state = state.pop_pending()
     state = battle_mod.declare_battle(state, action, rng)
-    if action.player == FactionId.MARQUISE:
+    if not is_command_warren and action.player == FactionId.MARQUISE:
         state = _spend_action(state)  # 6.5.1 戦闘アクション
     return state
 
@@ -355,6 +383,21 @@ def _apply_craft(state: GameState, action: CraftCard, rng) -> GameState:
     if action.player == FactionId.VAGABOND:
         return vagabond_mod.apply_craft_vagabond(state, action, rng)
     return apply_craft(state, action, rng)
+
+
+# ---------------- immediate/persistent クラフト効果(18.3 / 18.4) ----------------
+def _apply_use_crafted_effect(state: GameState, action: UseCraftedEffect,
+                              rng) -> GameState:
+    """UseCraftedEffect のディスパッチ: 戦闘効果ステージ中か否かで振り分ける。"""
+    if state.pending and isinstance(state.pending[-1], BattleEffectsDecision):
+        return battle_mod.apply_battle_effect(state, action, rng)
+    from .crafting import apply_phase_effect
+    return apply_phase_effect(state, action, rng)
+
+
+def _apply_skip_battle_effects(state: GameState, action: SkipBattleEffects,
+                               rng) -> GameState:
+    return battle_mod.apply_skip_battle_effects(state, action, rng)
 
 
 def _apply_vagabond_item_choice(state: GameState, action: VagabondItemChoice,
@@ -429,6 +472,8 @@ _HANDLERS = {
     AllocateHit: _apply_allocate_hit,
     DiscardCard: _apply_discard,
     CraftCard: _apply_craft,
+    UseCraftedEffect: _apply_use_crafted_effect,
+    SkipBattleEffects: _apply_skip_battle_effects,
     # 鷲巣王朝(第7章)。本体は factions/eyrie.py
     EyrieChooseCorner: eyrie_mod.apply_choose_corner,
     EyrieChooseLeader: eyrie_mod.apply_choose_leader,

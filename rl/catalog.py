@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 from engine.board import load_map
 from engine.cards import load_card_defs
+from engine.crafting import _EFFECT_WHITELIST
 from engine.legal import legal_actions
 from engine.types import (
     B_BASE,
@@ -42,7 +43,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "
 
 #: カタログのバージョン。キー空間(catalog.size)が変わる変更のたびに増やす。
 #: ckpt に保存し resume 時の非互換を検出する(14.7。旧 ckpt を無言で壊さない)。
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 
 
 # ============================================================
@@ -66,6 +67,15 @@ CARD_BASE_IDS: Tuple[str, ...] = tuple(d.id for d in _CARD_DEFS)
 #: ActivateDominance の base_id ドメイン、TakeDominance の dominance_base_id ドメイン、
 #: VagabondCoalition の base_id ドメインに使う。
 DOMINANCE_BASE_IDS: Tuple[str, ...] = tuple(d.id for d in _CARD_DEFS if d.is_dominance)
+
+#: 継続効果カード(persistent×ホワイトリスト, 18.2)の base_id 10種
+#: (cards.json 定義順, 18.5)。UseCraftedEffect の card_key ドメイン。
+#: immediate(Favor三種)はクラフト時に即時解決され UseCraftedEffect
+#: アクションにならないため含めない。
+USE_EFFECT_KEYS: Tuple[str, ...] = tuple(
+    d.id for d in _CARD_DEFS
+    if d.effect is not None and d.effect.get("type") == "persistent"
+    and d.id in _EFFECT_WHITELIST)
 
 
 def _load_quest_ids() -> Tuple[str, ...]:
@@ -117,6 +127,7 @@ _OP_MOVE_MAX = 10     # 連合兵士10(8.3.1)
 _PARAMLESS = (
     "EndPhase", "MarquiseRecruit", "EyrieSkipDecree", "EyrieTurmoil",
     "AllianceEndOps", "VagabondExplore", "MarquiseSkipMove",
+    "SkipBattleEffects",
 )
 #: キー=(型名, base_id) のアクション型名(手札を離れるカードは銘柄が戦略価値を持つ)
 _BASEID_ACTIONS = (
@@ -212,6 +223,9 @@ def action_key(state, action) -> Tuple:
                 state.cards.base_id(action.dominance_id))
     if name == "VagabondCoalition":
         return (name, state.cards.base_id(action.card_id), action.partner)
+    if name == "UseCraftedEffect":
+        # card_key はすでに base_id(18.3/18.4)
+        return (name, action.card_key, action.target_faction, action.target_clearing)
     raise KeyError("action_key: unknown action type %s" % name)
 
 
@@ -346,6 +360,17 @@ def _build_keys() -> List[Tuple]:
     for b in DOMINANCE_BASE_IDS:
         for partner in DEFENDERS:
             add(("VagabondCoalition", b, partner))
+    # UseCraftedEffect : (型名, card_key, target_faction?, target_clearing?)(18.5)。
+    #   パラメータなし系(royal-claim/command-warren/cobbler/戦闘効果3種)=(key,None,None)、
+    #   対象派閥系(stand-and-deliver/better-burrow-bank)=(key,faction,None)、
+    #   tax-collector=(key,None,clearing)。(key,None,None) の死にキーは許容(12.2)。
+    for k in USE_EFFECT_KEYS:
+        add(("UseCraftedEffect", k, None, None))
+    for k in ("stand-and-deliver", "better-burrow-bank"):
+        for f in DEFENDERS:
+            add(("UseCraftedEffect", k, f, None))
+    for c in CLEARINGS:
+        add(("UseCraftedEffect", "tax-collector", None, c))
     return keys
 
 
