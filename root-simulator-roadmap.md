@@ -17,7 +17,7 @@
 | 3 | 統計基盤(並列runner・SQLite・report・dashboard) | ✅ 完了 |
 | 4 | ヒューリスティックbot(1手先読みgreedy+派閥別評価関数) | ✅ 完了 |
 | 5 | 放浪部族の追加(実装+レビュー+テスト+評価関数) | ✅ 完了 |
-| R | ルール完全性(既知の簡略化の解消) | 🚧 A完了、B〜D残 |
+| R | ルール完全性(既知の簡略化の解消) | 🚧 A・B完了、C〜D残 |
 | 6 | 強化学習(PPO self-play) | 🚧 6a完了・6c前半完了、6b/6c後半残 |
 | 7 | UI接続(観戦・対人) | 未着手(任意) |
 
@@ -25,7 +25,7 @@
 
 **完了フェーズの恒常メモ**:
 - GitHubリモート: git@github.com:yuto226/ROOT-Boad-Game-Simulator.git(main)。`docs/`(ルールブックPDF等)はgit管理外、消えたら `tools/extract_rulebook.py` で再生成(URLはCLAUDE.md)
-- テスト実行: `python3 -m pytest tests/ -q`(65 passed + 3 skipped + 1 xfailed。xfail=城砦6.2.2、フェーズR-Bで解除予定。skip=torch必要テスト)
+- テスト実行: `python3 -m pytest tests/ -q`(67 passed + 3 skipped。skip=torch必要テスト)
 - bot勝率の参考値(バランスの結論ではない): ランダム4派閥=連合圧勝 → 全heuristic 3派閥=猫48.5%/連合51.5%(鷲巣とvagabondのheuristicは弱い。1-plyの原理的限界、RLで解決の方向)
 
 ---
@@ -35,13 +35,14 @@
 **目的**: 既知の簡略化を解消し、バランス統計検証の信頼性を上げる。
 
 - [x] **A: 圧倒カード(3.3)+共闘軍(9.2.8)** — 2026-07-11完了(bd83beb+5247e50)。設計=DESIGN.md **14章**。VP凍結の中央集約(mechanics.award_vp)・捨て山リダイレクト(to_discard)・昼光共通フック・鳥歌開始時の圧倒勝利判定・winners(共闘の共同勝利)。rl/はcatalog v2(size 8052、CATALOG_VERSION導入)。500試合ランダム4派閥で圧倒勝利157・共闘勝利84を確認
-- [ ] **B: 猫の簡略化バッチ** — 行軍2移動(6.5.2)/野戦病院(6.2.3)/城砦の配置禁止(6.2.2、xfail解除)/奇襲2ヒットの除去対象選択
+- [x] **B: 猫の簡略化バッチ** — 2026-07-11完了。設計=DESIGN.md **15章**。行軍2移動(6.5.2、MarquiseMarchDecision+SkipMove)/野戦病院(6.2.3、イベント単位集計・反乱と狙撃にも適用)/城砦の配置禁止(6.2.2、placement_blocked。xfailは誤読につき正テスト2本に差し替え)/奇襲2ヒットの除去対象選択(4.3.1.II、_finish_allocationに継続処理を統合)。rl/はcatalog v3(size 8096)。ランダム4派閥100戦で行軍2移動目3168回(移動92.2%)・野戦病院709回(発動58.1%)
 - [ ] **C: immediate/persistentクラフト効果** — ホワイトリスト方式(DESIGN.md 3.7)。Armorers/Sappers/Brutal Tactics/Royal Claim/Command Warren/Better Burrow Bank/Cobbler/Codebreakers/Stand and Deliver!/Tax Collector/Favor×3
 - [ ] **D(任意): 細部** — 猫の木材支払い広場選択/工房プールの1ターン1クラフト制限/鷲巣クラフトany割当/連合の支援者支払い選択・戒厳令(8.4.2.II.a)の解釈確認/部族の_pay_any・隠れ家自動選択/同盟の同時移動・攻撃・肩代わり(9.2.9.II.b〜d)
 
 **引き継ぎメモ**:
 > - A完了によりゲームの終わり方の分布が変わった(勝利手段3種)。以後のバランス統計はこの実装前提で読む。gamesテーブルに勝因列は未追加、共闘の共同勝利もDB未記録(winner=主勝者のみ)=既知の割り切り
-> - B/Cの実装時は、新アクション追加なら rl/catalog.py の追随(キー追加+CATALOG_VERSION増分)とencoderの観測追加をセットで行うこと(Aのコミット 5247e50 が手本)
+> - Cの実装時は、新アクション追加なら rl/catalog.py の追随(キー追加+CATALOG_VERSION増分)とencoderの観測追加をセットで行うこと(A=5247e50、B=15.5が手本)
+> - B完了によりcatalog v3(size 8096)。v2以前のRL ckptとは非互換(resume時にCATALOG_VERSIONで検出される)
 
 ---
 

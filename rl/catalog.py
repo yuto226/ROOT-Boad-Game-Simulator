@@ -42,7 +42,7 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "
 
 #: カタログのバージョン。キー空間(catalog.size)が変わる変更のたびに増やす。
 #: ckpt に保存し resume 時の非互換を検出する(14.7。旧 ckpt を無言で壊さない)。
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 
 
 # ============================================================
@@ -116,7 +116,7 @@ _OP_MOVE_MAX = 10     # 連合兵士10(8.3.1)
 #: パラメータなしのアクション型名(キー=(型名,))
 _PARAMLESS = (
     "EndPhase", "MarquiseRecruit", "EyrieSkipDecree", "EyrieTurmoil",
-    "AllianceEndOps", "VagabondExplore",
+    "AllianceEndOps", "VagabondExplore", "MarquiseSkipMove",
 )
 #: キー=(型名, base_id) のアクション型名(手札を離れるカードは銘柄が戦略価値を持つ)
 _BASEID_ACTIONS = (
@@ -149,7 +149,7 @@ def action_key(state, action) -> Tuple:
         return (name,)
     if name in _BASEID_ACTIONS:
         return (name, state.cards.base_id(action.card_id))
-    if name in ("AmbushChoice", "OutragePay"):
+    if name in ("AmbushChoice", "OutragePay", "MarquiseFieldHospital"):
         cid = action.card_id
         return (name, None if cid is None else state.cards.base_id(cid))
     if name in ("DeclareBattle", "AllianceOpBattle"):
@@ -227,8 +227,8 @@ def _build_keys() -> List[Tuple]:
     for n in _BASEID_ACTIONS:
         for b in CARD_BASE_IDS:
             add((n, b))
-    # AmbushChoice / OutragePay : (型名, base_id or None)
-    for n in ("AmbushChoice", "OutragePay"):
+    # AmbushChoice / OutragePay / MarquiseFieldHospital : (型名, base_id or None)
+    for n in ("AmbushChoice", "OutragePay", "MarquiseFieldHospital"):
         add((n, None))
         for b in CARD_BASE_IDS:
             add((n, b))

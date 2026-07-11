@@ -50,7 +50,7 @@ _DECISION_TYPES: Tuple[str, ...] = (
     "EyrieLeaderDecision", "EyrieDecreeDecision", "EyrieRoostDecision",
     "OutrageDecision", "SupportersLimitDecision", "VagabondSetupCharacterDecision",
     "VagabondSetupForestDecision", "RefreshDecision", "ItemDamageDecision",
-    "ItemLimitDecision",
+    "ItemLimitDecision", "MarquiseMarchDecision", "FieldHospitalDecision",
 )
 
 # 正規化スケール(概ね [0,1] に収める分母)。上界超過は describe 時に clip する。
