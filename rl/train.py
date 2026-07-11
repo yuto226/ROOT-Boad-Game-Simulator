@@ -1,10 +1,12 @@
-"""PPO self-play 学習 CLI エントリ(DESIGN.md 13.3 / 13.4)。
+"""PPO self-play 学習 CLI エントリ(DESIGN.md 13.3 / 13.4 / 16.5)。
 
   .venv/bin/python -m rl.train --factions marquise,eyrie --total-steps 20000
 
-チェックポイント ``rl_runs/<run名>/ckpt_<update>.pt``(model+optimizer+設定+総ステップ)、
-``--resume`` で再開。ログは CSV(``rl_runs/<run名>/log.csv``)。評価は ``--eval-every``
-更新ごとに vs RandomBot / vs HeuristicBot を各席で行い ``eval.csv`` へ書く。
+チェックポイント ``rl_runs/<run名>/ckpt_<update>.pt``(model+optimizer+設定+総ステップ+
+league プールメタ)、``--resume`` で再開。ログは CSV(``rl_runs/<run名>/log.csv``)。
+評価は ``--eval-every`` 更新ごとに vs RandomBot / vs HeuristicBot を各席で行い
+``eval.csv`` へ書く。``--league-prob>0``(既定 0.5)ならエピソードの一部で片席を
+過去世代の凍結ネットに差し替えるリーグ戦を行う(16章。0で無効=純 self-play)。
 """
 from __future__ import annotations
 
@@ -23,12 +25,14 @@ from engine.types import FactionId
 from .catalog import CATALOG_VERSION, ActionCatalog
 from .encoder import ObservationSpec
 from .eval import evaluate_both_seats, parse_factions, select_device
+from .league import OpponentPool
 from .net import build_net
 from .ppo import PPOConfig, PPOTrainer
 
 _LOG_FIELDS = [
     "update", "steps", "ep_len_mean", "episodes",
     "winrate_seat0", "winrate_seat1", "draws",
+    "league_episodes", "league_winrate",
     "policy_loss", "value_loss", "entropy", "approx_kl", "clipfrac",
     "sec_per_update", "steps_per_sec",
 ]
@@ -50,7 +54,7 @@ def _csv_writer(path: str, fields: List[str]):
 
 def _save_ckpt(path: str, trainer: PPOTrainer, update: int,
                factions, cfg: PPOConfig) -> None:
-    """model+optimizer+設定+総ステップを保存する(13.3)。"""
+    """model+optimizer+設定+総ステップ+league プールメタを保存する(13.3, 16.5)。"""
     torch.save({
         "model": trainer.net.state_dict(),
         "optimizer": trainer.optimizer.state_dict(),
@@ -61,6 +65,7 @@ def _save_ckpt(path: str, trainer: PPOTrainer, update: int,
         "obs_dim": trainer.net.obs_dim,
         "action_size": trainer.net.action_size,
         "catalog_version": CATALOG_VERSION,
+        "league_meta": trainer.pool.save_meta() if trainer.pool is not None else [],
         "config": {
             "num_envs": cfg.num_envs, "rollout_steps": cfg.rollout_steps,
             "gamma": cfg.gamma, "gae_lambda": cfg.gae_lambda,
@@ -68,7 +73,7 @@ def _save_ckpt(path: str, trainer: PPOTrainer, update: int,
             "minibatch_size": cfg.minibatch_size, "lr": cfg.lr,
             "vf_coef": cfg.vf_coef, "ent_coef": cfg.ent_coef,
             "max_grad_norm": cfg.max_grad_norm, "max_turns": cfg.max_turns,
-            "seed": cfg.seed,
+            "seed": cfg.seed, "league_prob": cfg.league_prob,
         },
     }, path)
 
@@ -91,6 +96,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--max-turns", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--league-prob", type=float, default=0.5,
+                         help="対戦相手を過去世代の凍結ネットに差し替える確率"
+                              "(0=無効=純 self-play, 16.5)")
+    parser.add_argument("--league-pool-max", type=int, default=20,
+                         help="プールに保持するスナップショット数の上限(16.5)")
+    parser.add_argument("--league-snapshot-every", type=int, default=20,
+                         help="N 更新ごとに現ネットを league プールへ追加"
+                              "(save-every とは独立, 16.5)")
     parser.add_argument("--device", type=str, default="auto",
                          help="auto=cuda>mps>cpu(13.6)")
     parser.add_argument("--run-name", type=str, default="run")
@@ -121,8 +134,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         update_epochs=args.update_epochs, minibatch_size=args.minibatch_size,
         lr=args.lr, vf_coef=args.vf_coef, ent_coef=args.ent_coef,
         max_grad_norm=args.max_grad_norm, max_turns=args.max_turns, seed=args.seed,
+        league_prob=args.league_prob,
     )
-    trainer = PPOTrainer(net, optimizer, cfg, device)
+    pool = OpponentPool(run_dir, pool_max=args.league_pool_max)
+    trainer = PPOTrainer(net, optimizer, cfg, device, pool=pool)
 
     start_update = 0
     if args.resume:
@@ -147,8 +162,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         trainer.total_steps = int(ckpt["total_steps"])
         trainer._next_seed = int(ckpt.get("next_seed", trainer._next_seed))
         start_update = int(ckpt["update"])
-        print("resumed from %s (update=%d total_steps=%d)"
-              % (args.resume, start_update, trainer.total_steps))
+        league_meta = ckpt.get("league_meta", [])
+        if league_meta:
+            trainer.pool = OpponentPool.load(
+                run_dir, league_meta, args.league_pool_max,
+                spec.obs_dim, catalog.size, device)
+        print("resumed from %s (update=%d total_steps=%d league_snapshots=%d)"
+              % (args.resume, start_update, trainer.total_steps, len(trainer.pool)))
 
     log_fh, log_writer = _csv_writer(os.path.join(run_dir, "log.csv"), _LOG_FIELDS)
     eval_fh, eval_writer = _csv_writer(os.path.join(run_dir, "eval.csv"), _EVAL_FIELDS)
@@ -173,6 +193,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "winrate_seat0": round(stats.seat_winrate(0), 4),
                 "winrate_seat1": round(stats.seat_winrate(1), 4),
                 "draws": stats.draws,
+                "league_episodes": stats.league_episodes,
+                "league_winrate": round(stats.league_winrate(), 4),
                 "policy_loss": round(metrics["policy_loss"], 5),
                 "value_loss": round(metrics["value_loss"], 5),
                 "entropy": round(metrics["entropy"], 5),
@@ -184,11 +206,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             log_writer.writerow(row)
             log_fh.flush()
             print("upd %d steps %d eplen %.1f ep %d wr0 %.2f wr1 %.2f "
-                  "ent %.3f kl %.4f ploss %.3f vloss %.3f %.0f st/s"
+                  "lg %d/%.2f ent %.3f kl %.4f ploss %.3f vloss %.3f %.0f st/s"
                   % (update, trainer.total_steps, stats.ep_len_mean(),
                      stats.episodes, stats.seat_winrate(0), stats.seat_winrate(1),
+                     stats.league_episodes, stats.league_winrate(),
                      metrics["entropy"], metrics["approx_kl"],
                      metrics["policy_loss"], metrics["value_loss"], steps_per_sec))
+
+            if (args.league_snapshot_every > 0
+                    and update % args.league_snapshot_every == 0):
+                trainer.pool.add(trainer.net, update, trainer._league_rng)
 
             if args.save_every > 0 and update % args.save_every == 0:
                 _save_ckpt(os.path.join(run_dir, "ckpt_%d.pt" % update),

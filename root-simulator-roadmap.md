@@ -65,16 +65,17 @@
 - [x] 学習コード一式(80b4f2a): `rl/net.py`+`rl/ppo.py`+`rl/nn_policy.py`(既存run_gameで評価)+`rl/train.py`/`rl/eval.py`。設計=DESIGN.md 13章
 - [x] Mac CPUで50万ステップ検証(下記結果)
 - [ ] 10⁷ステップ規模のGPU学習(6b完了後)
-- [ ] self-playの非定常対策(過去世代とのリーグ戦)→ スケールアップ判断
+- [x] self-playの非定常対策(過去世代とのリーグ戦)— ✅ 実装完了(2026-07-11。DESIGN.md 16章)→ スケールアップ判断はGPU学習後
 
 **引き継ぎメモ**:
 > - 実行環境: torchはリポジトリ直下 `.venv/`(gitignore)。`.venv/bin/python -m rl.train --total-steps N --run-name X`。出力は `rl_runs/<run名>/`(log.csv+eval.csv+ckpt、gitignore)。CPUが既定(約1350steps/s、MPSより速い)
-> - Windows機への接続: `ssh <user>@<tailscale名>`(Tailscale MagicDNS、IP <IP>)。Mac の id_ed25519 で鍵認証済み(administrators_authorized_keys 登録済み)。リモート実行は `ssh yuto@... "wsl -d Ubuntu -e bash -lc \"<cmd>\""` の形(cmd.exe経由なので**内側はダブルクォート**、シングルは通らない)
+> - Windows機への接続: `ssh <user>@<tailscale名>`(実値はリポジトリに書かない。Claudeのローカルメモリに記録済み)。Mac の鍵で鍵認証設定済み。リモート実行は `ssh <user>@<host> "wsl -d Ubuntu -e bash -lc \"<cmd>\""` の形(cmd.exe経由なので**内側はダブルクォート**、シングルは通らない)
 > - 次セッションの最初の作業: WSL2のUbuntu内で git clone(SSH鍵の用意 or HTTPSで)→ `docker compose -f docker/compose.yaml build` → 学習ジョブ投入
 > - RL ckpt互換性: フェーズR-B完了で catalog v3(size 8096)。旧ckptからのresumeは不可(CATALOG_VERSIONで検出)
 > - **Mac 50万ステップの結果(rl_runs/mac-500k、猫vs鷲巣)**: entropy 2.39→1.04・KL安定。vs RandomBot=猫席100%/鷲巣席96.9%。vs HeuristicBot=**猫席96.9〜100%**(フェーズ4 botに圧勝)/鷲巣席0〜12.5%。self-playが猫に偏り鷲巣の学習信号が薄い=リーグ戦・shaping・スケールで対処予定
 > - **ckpt非互換に注意**: catalog v2(圧倒カード対応)で行動空間が8052になり、旧ckpt(mac-500k)はresume不可(明示エラーが出る)。GPU学習はv2で新規に回す
-> - 次の作業候補: (1)6bのWindows実機セットアップ(ユーザー作業主体) (2)リーグ戦の設計・実装(Macで完結可能)
+> - **リーグ戦実装済み(2026-07-11、DESIGN.md 16章)**: `rl/league.py`(OpponentPool)+ppo/train拡張。`--league-prob`(既定0.5、0で従来の純self-play)/`--league-pool-max`(既定20)/`--league-snapshot-every`(既定20更新)。log.csvに league_episodes/league_winrate 列が増えた(旧runのlog.csvとは列非互換)。winrate_seat0/1 は self-playエピソードのみの集計。スナップショットは `rl_runs/<run>/league/snap_*.pt`(間引き時はファイルも削除)、resume時はckptの league_meta から再構築(欠損はwarn+skip)。league有効時のスループットは約4〜5割低下(凍結ネット推論の分)
+> - 次の作業: GPU学習(6bの残り=clone+build+ジョブ投入 → 10⁷ステップをリーグ戦有効で回す)
 
 ---
 

@@ -1061,3 +1061,84 @@ selftest 新シナリオの結果 / pytest 全件 / 4派閥 smoke 100試合 --va
 selftest 新シナリオ結果 / pytest 全件(xfail 0 になること) / smoke 100試合 /
 決定性検証 / ランダム4派閥での野戦病院発動回数・行軍2移動使用率(参考値) /
 レビュー注目点(ファイル:行)
+
+---
+
+## 16. フェーズ6c(後半): リーグ戦=過去世代対戦相手プール(Fable 2026-07-11。実装者はこの設計に従うこと)
+
+**目的**: 純self-playの非定常性(忘却・循環)対策と、片席全敗時の学習信号消失対策
+(mac-500k で鷲巣席の報酬がほぼ全て -1 になり advantage が潰れた)。
+エピソードの一部で片席を凍結した過去世代 ckpt に差し替え、多様な強さの相手との
+対戦を混ぜる。ROOT は同一派閥のミラー戦が存在しないが、リーグ戦は
+「学習ネット席 vs 凍結ネット席」の異派閥対戦なので制約にならない。
+
+### 16.1 スコープ
+
+- 新規: `rl/league.py`(`OpponentPool`)+ `tests/test_league.py`。
+- 変更: `rl/ppo.py`(collect の対戦相手差し替え)、`rl/train.py`(CLI・snapshot・
+  ログ列・resume)。net/encoder/catalog/env は**変更しない**。
+
+### 16.2 OpponentPool(rl/league.py)
+
+- スナップショット = 凍結した `ActorCritic`(eval モード、`requires_grad_(False)`)。
+  作成時に `run_dir/league/snap_<update>.pt`(model state_dict のみ)へ保存し、
+  メモリ上にもネットを保持(pool-max 20 × ~30MB は許容)。
+- API:
+  - `add(net, update)` — 現ネットの deepcopy を凍結して追加。上限超過時は
+    **ランダムに1つ間引く**(FIFO でなく、履歴全体をほぼ一様にカバーするため)。
+    間引いたスナップショットは**ディスクのファイルも削除**する(長期 run での蓄積防止。
+    過去 ckpt の league_meta が参照していても resume の warn+skip で吸収される)。
+  - `sample(rng) -> (snapshot_id, net)` — 一様サンプル。空なら None。
+  - `save_meta() / load(run_dir, meta, device)` — resume 用
+    (メタ= `[(update, ファイル名), ...]` を ckpt に含める)。
+- サンプリング重み付け(PFSP)は導入しない。効果不足が観測されたら将来検討。
+
+### 16.3 collect の変更(rl/ppo.py)
+
+- `_Worker` に対戦相手割当を追加: `opponent: Optional[(agent名, net)]`。
+  **エピソード開始時(reset 直後)** に league 用 rng
+  (`np.random.Generator`, seed=`cfg.seed`由来で torch と分離)で抽選:
+  確率 `league_prob` かつプール非空なら、席(0/1)を一様に選び凍結ネットを割当。
+  それ以外は純 self-play(従来どおり)。
+- 推論バッチ: 各ステップで actor が学習ネット担当の env と、凍結ネット担当の env を
+  分け、**学習ネット分は従来どおり1バッチ**、凍結ネット分は snapshot_id ごとに
+  まとめて `torch.no_grad()` で推論(**sample で行動**。greedy にしない=多様性維持)。
+- **凍結ネット側の遷移はバッファに入れない**(traj に add しない)。
+  `steps`(rollout_steps のカウンタ)は**学習ネットの意思決定点のみ**進める。
+  凍結側の意思決定点は `_Worker.ep_steps` にだけ数える(エピソード長統計は従来定義)。
+- `_flush_episode` / `_bootstrap_open`: 凍結側 agent の traj は常に空なので
+  既存の `len(tr)==0: continue` がそのまま効く。勝敗統計は分離する(16.4)。
+- GAE・PPO 更新は無変更(league 由来の遷移も同じバッチに混ぜて正規化してよい)。
+
+### 16.4 統計とログ
+
+- `RolloutStats` を拡張: self-play エピソードは従来の `seat_wins` に、league
+  エピソードは `league_episodes / league_wins(学習ネット視点) / league_draws` に計上。
+  既存の `winrate_seat0/1` は **self-play エピソードのみ**から算出(意味を変えない)。
+- `log.csv` に列追加: `league_episodes, league_winrate`。
+  既存 run の log.csv と列が変わるため、**新規 run で使う前提**(追記互換は不要)。
+
+### 16.5 CLI と snapshot(rl/train.py)
+
+- 追加フラグ: `--league-prob`(既定 **0.5**。0 で無効=従来挙動)/
+  `--league-pool-max`(既定 20)/ `--league-snapshot-every`(既定 20 更新。
+  save-every とは独立)。
+- snapshot タイミング: `update % league_snapshot_every == 0` の更新後に `pool.add`。
+  プールが空の序盤は自動的に純 self-play になる(それで正しい)。
+- ckpt に `league_meta`(16.2)を追加。resume 時は `run_dir/league/` から再構築
+  (ファイル欠損は警告してスキップ)。league rng の状態は保存しない
+  (resume 後の抽選列が変わるのは許容。既存の np.random シャッフルと同水準)。
+
+### 16.6 検証と完了条件(subagent の報告に含めること)
+
+1. `tests/test_league.py`(torch 必須なので skipif):
+   (a) pool の add/上限間引き/sample の決定性(rng 固定)
+   (b) league エピソードで凍結側 agent の遷移がバッファに入らないこと
+       (collect 後の batch サイズ=学習側意思決定点数と一致)
+   (c) `--league-prob 0` が従来の純 self-play と同一挙動(同 seed で batch 一致)
+2. `python3 -m pytest tests/ -q` 全パス(torch なし環境では league テストが skip)
+3. スモーク: `.venv/bin/python -m rl.train --total-steps 30000 --league-prob 0.5
+   --league-snapshot-every 3` 程度で (a) クラッシュしない (b) snapshot 生成と
+   league_episodes>0 を log.csv で確認 (c) ckpt 保存 → resume でプール再構築が動く
+4. スループット低下の実測(league_prob=0.5 で steps/s がどの程度落ちるか)
+5. レビュー注目点(ファイル:行)

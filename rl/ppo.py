@@ -7,10 +7,13 @@
   (γ=1.0, λ=0.95 を既定)。イテレーション途中で切れた列は value でブートストラップ。
 - **PPO 更新**: clip=0.2, epochs=4, minibatch=256, lr=2.5e-4, value 係数 0.5(clip 付き),
   entropy 係数 0.01, grad clip 0.5。
-- **対戦相手**: 純 self-play(両席同一の最新ネット)。
+- **対戦相手**: 純 self-play(両席同一の最新ネット)。``league_prob>0`` かつ
+  :class:`~rl.league.OpponentPool` が非空なら、エピソード開始時に確率 ``league_prob``
+  で片席を凍結した過去世代ネットに差し替える(リーグ戦, DESIGN.md 16.3)。
 
 torch はこのモジュールに閉じる。env の seed はイテレーションごとに決定的に生成し、
-学習用サンプリングは torch の rng に従う(乱数系列の分離, 13.3)。
+学習用サンプリングは torch の rng に従う(乱数系列の分離, 13.3)。league 対戦相手の
+抽選には専用の numpy rng を使い torch/env の乱数系列から分離する(16.3)。
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import torch
 from engine.types import FactionId
 
 from .env import RootEnv
+from .league import OpponentPool
 from .net import ActorCritic, masked_logits
 
 
@@ -44,6 +48,7 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     max_turns: int = 300
     seed: int = 0                      # env seed 系列と torch rng の基点
+    league_prob: float = 0.0           # 過去世代凍結ネットに差し替える確率(0=無効, 16.5)
 
 
 # ------------------------------------------------------------
@@ -109,18 +114,34 @@ def compute_gae(values: List[float], rewards: List[float], done: bool,
 
 @dataclass
 class RolloutStats:
-    """1イテレーションの収集統計(ログ用)。"""
+    """1イテレーションの収集統計(ログ用)。
+
+    ``episodes`` / ``ep_len_sum`` / ``draws`` は self-play・league 両方を含む
+    全エピソードの集計。``seat_wins`` は **self-play エピソードのみ**(既存の
+    ``winrate_seat0/1`` の意味を変えないため, 16.4)。league エピソードは
+    ``league_episodes`` / ``league_wins``(学習ネット視点)/ ``league_draws`` に
+    別集計する。
+    """
 
     episodes: int = 0
     ep_len_sum: int = 0
-    seat_wins: Dict[int, int] = field(default_factory=dict)  # seat index -> 勝利数
+    seat_wins: Dict[int, int] = field(default_factory=dict)  # seat index -> 勝利数(self-play のみ)
     draws: int = 0
+    league_episodes: int = 0
+    league_wins: int = 0    # 学習ネット視点の勝利数
+    league_draws: int = 0
 
     def ep_len_mean(self) -> float:
         return self.ep_len_sum / self.episodes if self.episodes else 0.0
 
     def seat_winrate(self, seat: int) -> float:
-        return self.seat_wins.get(seat, 0) / self.episodes if self.episodes else 0.0
+        # 分母は self-play エピソードのみ(league を含めると希釈される, 16.4)
+        selfplay = self.episodes - self.league_episodes
+        return self.seat_wins.get(seat, 0) / selfplay if selfplay else 0.0
+
+    def league_winrate(self) -> float:
+        return (self.league_wins / self.league_episodes
+                if self.league_episodes else 0.0)
 
 
 class _Worker:
@@ -130,7 +151,10 @@ class _Worker:
         self.env = env
         self.agents: Tuple[str, ...] = tuple(env.possible_agents)
         self.traj: Dict[str, _Trajectory] = {a: _Trajectory() for a in self.agents}
-        self.ep_steps: int = 0  # 現エピソードの意思決定点数(両席合算)
+        self.ep_steps: int = 0  # 現エピソードの意思決定点数(両席合算。学習・league 両方カウント, 16.3)
+        # league 対戦相手(16.3): None=純 self-play。非 None=(agent名, 凍結net, snapshot_id)。
+        # 凍結側の意思決定点は traj に追加しない(バッファに入れない)。
+        self.opponent: Optional[Tuple[str, ActorCritic, int]] = None
 
     def reset_episode(self) -> None:
         self.traj = {a: _Trajectory() for a in self.agents}
@@ -141,12 +165,17 @@ class PPOTrainer:
     """PPO self-play トレーナ(DESIGN.md 13.3)。"""
 
     def __init__(self, net: ActorCritic, optimizer: torch.optim.Optimizer,
-                 config: PPOConfig, device: torch.device) -> None:
+                 config: PPOConfig, device: torch.device,
+                 pool: Optional[OpponentPool] = None) -> None:
         self.net = net
         self.optimizer = optimizer
         self.cfg = config
         self.device = device
         self.total_steps = 0
+        self.pool = pool  # league 対戦相手プール(None=未使用, 16.3)
+        # league 対戦相手の抽選専用 rng(torch/env の乱数系列と分離, 16.3)。
+        # resume 時も再構築するのみで状態は保存しない(16.5: 抽選列が変わるのは許容)。
+        self._league_rng: np.random.Generator = np.random.default_rng(config.seed + 1_000_003)
         # env の seed 系列(イテレーションごとに決定的に生成, 13.3)。
         self._next_seed = config.seed * 1_000_003 + 1
         self.workers: List[_Worker] = [
@@ -156,6 +185,8 @@ class PPOTrainer:
         ]
         self._seat_of: Dict[str, int] = {
             f.value: i for i, f in enumerate(config.factions)}
+        for w in self.workers:
+            self._assign_opponent(w)
 
     # ------------------------------------------------------------
     def _alloc_seed(self) -> int:
@@ -165,39 +196,101 @@ class PPOTrainer:
         return s
 
     # ------------------------------------------------------------
+    def _assign_opponent(self, w: _Worker) -> None:
+        """エピソード開始時(reset 直後)に league 対戦相手を抽選する(16.3)。
+
+        ``league_prob<=0`` または pool が未設定/空なら常に純 self-play(``opponent=None``)。
+        それ以外は確率 ``league_prob`` で発火し、席(0/1)を一様に選んで凍結ネットを割当てる。
+        """
+        w.opponent = None
+        if self.cfg.league_prob <= 0 or self.pool is None or len(self.pool) == 0:
+            return
+        if self._league_rng.random() >= self.cfg.league_prob:
+            return
+        seat = int(self._league_rng.integers(0, len(w.agents)))
+        sampled = self.pool.sample(self._league_rng)
+        if sampled is None:
+            return
+        snapshot_id, net = sampled
+        w.opponent = (w.agents[seat], net, snapshot_id)
+
+    # ------------------------------------------------------------
     def collect(self) -> Tuple[Dict[str, torch.Tensor], RolloutStats]:
-        """T ステップ(全 env 合算)を収集しバッチ化して返す(13.3)。"""
+        """T ステップ(学習ネットの意思決定点のみ合算)を収集しバッチ化して返す(13.3, 16.3)。
+
+        league 対戦相手が割り当たった env は、その席の手番のときだけ凍結ネットで
+        推論する(sample で行動、バッファには入れない)。``steps``(rollout_steps の
+        カウンタ)は学習ネットの意思決定点のみ進む(16.3)。
+        """
         cfg = self.cfg
         stats = RolloutStats()
         completed: List[_Trajectory] = []
         steps = 0
 
         while steps < cfg.rollout_steps:
-            # --- env 間バッチ推論(13.3): 各 env の現手番 agent の obs/mask を集める ---
             actors = [w.env.agent_selection for w in self.workers]
-            obs_masks = [w.env.observe(a) for w, a in zip(self.workers, actors)]
-            obs_batch = np.stack([om["observation"] for om in obs_masks])
-            mask_batch = np.stack([om["action_mask"] for om in obs_masks])
-            obs_t = torch.as_tensor(obs_batch, device=self.device)
-            mask_t = torch.as_tensor(mask_batch, device=self.device)
-            with torch.no_grad():
-                action_t, logp_t, value_t = self.net.act(obs_t, mask_t)
-            actions = action_t.cpu().numpy()
-            logps = logp_t.cpu().numpy()
-            values = value_t.cpu().numpy()
 
+            # --- 学習ネット担当と凍結ネット担当の env を分ける(16.3) ---
+            learner_idx: List[int] = []
+            frozen_idx: List[int] = []
             for i, w in enumerate(self.workers):
-                actor = actors[i]
-                w.traj[actor].add(obs_batch[i], mask_batch[i], int(actions[i]),
-                                  float(logps[i]), float(values[i]))
-                w.ep_steps += 1
-                w.env.step(int(actions[i]))
-                steps += 1
+                if w.opponent is not None and w.opponent[0] == actors[i]:
+                    frozen_idx.append(i)
+                else:
+                    learner_idx.append(i)
 
+            actions: List[int] = [0] * len(self.workers)
+
+            # --- 学習ネット分: 従来どおり1バッチ(13.3) ---
+            if learner_idx:
+                obs_masks = [self.workers[i].env.observe(actors[i]) for i in learner_idx]
+                obs_batch = np.stack([om["observation"] for om in obs_masks])
+                mask_batch = np.stack([om["action_mask"] for om in obs_masks])
+                obs_t = torch.as_tensor(obs_batch, device=self.device)
+                mask_t = torch.as_tensor(mask_batch, device=self.device)
+                with torch.no_grad():
+                    action_t, logp_t, value_t = self.net.act(obs_t, mask_t)
+                a_np = action_t.cpu().numpy()
+                logp_np = logp_t.cpu().numpy()
+                value_np = value_t.cpu().numpy()
+                for k, i in enumerate(learner_idx):
+                    w = self.workers[i]
+                    actor = actors[i]
+                    w.traj[actor].add(obs_batch[k], mask_batch[k], int(a_np[k]),
+                                      float(logp_np[k]), float(value_np[k]))
+                    w.ep_steps += 1
+                    actions[i] = int(a_np[k])
+                    steps += 1  # 学習ネットの意思決定点のみ進める(16.3)
+
+            # --- 凍結ネット分: snapshot_id ごとにまとめて no_grad 推論(16.3) ---
+            if frozen_idx:
+                groups: Dict[int, List[int]] = {}
+                for i in frozen_idx:
+                    snap_id = self.workers[i].opponent[2]
+                    groups.setdefault(snap_id, []).append(i)
+                for snap_id, idxs in groups.items():
+                    frozen_net = self.workers[idxs[0]].opponent[1]
+                    obs_masks = [self.workers[i].env.observe(actors[i]) for i in idxs]
+                    obs_batch = np.stack([om["observation"] for om in obs_masks])
+                    mask_batch = np.stack([om["action_mask"] for om in obs_masks])
+                    obs_t = torch.as_tensor(obs_batch, device=self.device)
+                    mask_t = torch.as_tensor(mask_batch, device=self.device)
+                    with torch.no_grad():
+                        # sample で行動(greedy にしない=多様性維持, 16.3)。
+                        action_t, _, _ = frozen_net.act(obs_t, mask_t)
+                    a_np = action_t.cpu().numpy()
+                    for k, i in enumerate(idxs):
+                        actions[i] = int(a_np[k])
+                        self.workers[i].ep_steps += 1  # 意思決定点数のみ数える。traj には入れない(16.3)
+
+            # --- 全 env に行動を適用(16.3) ---
+            for i, w in enumerate(self.workers):
+                w.env.step(actions[i])
                 if w.env._done:
                     self._flush_episode(w, completed, stats)
                     w.reset_episode()
                     w.env.reset(self._alloc_seed())
+                    self._assign_opponent(w)
 
         # --- 途中で切れた列を value でブートストラップして回収(13.3) ---
         self._bootstrap_open(completed)
@@ -209,18 +302,34 @@ class PPOTrainer:
     # ------------------------------------------------------------
     def _flush_episode(self, w: _Worker, completed: List[_Trajectory],
                        stats: RolloutStats) -> None:
-        """終局した env の per-agent トラジェクトリを確定して回収する(13.3)。"""
+        """終局した env の per-agent トラジェクトリを確定して回収する(13.3, 16.4)。
+
+        self-play エピソードは従来どおり ``seat_wins`` へ、league エピソードは
+        ``league_episodes/league_wins(学習ネット視点)/league_draws`` へ分離して
+        計上する(16.4)。``episodes``/``ep_len_sum``/``draws`` は両方を含む全体集計。
+        """
         env = w.env
         info = env.infos[w.agents[0]]
-        winner = info.get("winner")
+        winner = info.get("winner")  # env.py が既に .value(str)へ変換済み(12.4)
         stats.episodes += 1
         stats.ep_len_sum += w.ep_steps
-        if winner is None:
-            stats.draws += 1
+        if w.opponent is None:
+            # 純 self-play(16.4: 既存 seat_wins/winrate_seat0/1 の意味は変えない)
+            if winner is None:
+                stats.draws += 1
+            else:
+                seat = self._seat_of.get(winner)
+                if seat is not None:
+                    stats.seat_wins[seat] = stats.seat_wins.get(seat, 0) + 1
         else:
-            seat = self._seat_of.get(winner)
-            if seat is not None:
-                stats.seat_wins[seat] = stats.seat_wins.get(seat, 0) + 1
+            # league: 片席が凍結ネット(16.4)
+            opp_agent = w.opponent[0]
+            stats.league_episodes += 1
+            if winner is None:
+                stats.draws += 1
+                stats.league_draws += 1
+            elif winner != opp_agent:
+                stats.league_wins += 1  # 学習ネット側が勝利
         for a in w.agents:
             tr = w.traj[a]
             if len(tr) == 0:
