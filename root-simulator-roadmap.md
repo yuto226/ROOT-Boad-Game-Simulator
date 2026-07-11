@@ -55,9 +55,10 @@
 ### 6a: RL環境ラッパー — ✅ 完了(2026-07-11, ebc2d46)
 `rl/catalog.py`(固定行動空間、正準キー方式)+`rl/encoder.py`(完全情報・perspective onehot)+`rl/env.py`(AEC互換・pettingzoo非依存)+`pyproject.toml`。設計=DESIGN.md 12章。
 
-### 6b: Windows側の学習環境構築 — 🚧 定義済み・実機セットアップ残
+### 6b: Windows側の学習環境構築 — 🚧 疎通確認まで完了(2026-07-11)
 - [x] Dockerfile/compose/セットアップ手順書(`docker/`。detached起動でSSH切断耐性)
-- [ ] Windows実機: WSL2+Docker Desktop+GPU確認 → Tailscale+SSH → `docker compose build` → 学習ジョブ投入(手順は `docker/README.md`)
+- [x] Windows実機の疎通: WSL2(Ubuntu)+Docker Desktop統合+GPUコンテナで nvidia-smi 確認(RTX 4080 Super/CUDA 13.1)+Tailscale+SSH鍵認証(ハマりどころは docker/README.md 5章に追記)
+- [ ] リポジトリclone → `docker compose build` → 学習ジョブ投入(手順は `docker/README.md`)
 - [ ] 学習曲線の監視方法の確定(まずは log.csv の tail。W&B/TBは必要になってから)
 
 ### 6c: PPO self-play学習 — 🚧 前半(コード+Mac検証)完了
@@ -68,6 +69,9 @@
 
 **引き継ぎメモ**:
 > - 実行環境: torchはリポジトリ直下 `.venv/`(gitignore)。`.venv/bin/python -m rl.train --total-steps N --run-name X`。出力は `rl_runs/<run名>/`(log.csv+eval.csv+ckpt、gitignore)。CPUが既定(約1350steps/s、MPSより速い)
+> - Windows機への接続: `ssh <user>@<tailscale名>`(Tailscale MagicDNS、IP <IP>)。Mac の id_ed25519 で鍵認証済み(administrators_authorized_keys 登録済み)。リモート実行は `ssh yuto@... "wsl -d Ubuntu -e bash -lc \"<cmd>\""` の形(cmd.exe経由なので**内側はダブルクォート**、シングルは通らない)
+> - 次セッションの最初の作業: WSL2のUbuntu内で git clone(SSH鍵の用意 or HTTPSで)→ `docker compose -f docker/compose.yaml build` → 学習ジョブ投入
+> - RL ckpt互換性: フェーズR-B完了で catalog v3(size 8096)。旧ckptからのresumeは不可(CATALOG_VERSIONで検出)
 > - **Mac 50万ステップの結果(rl_runs/mac-500k、猫vs鷲巣)**: entropy 2.39→1.04・KL安定。vs RandomBot=猫席100%/鷲巣席96.9%。vs HeuristicBot=**猫席96.9〜100%**(フェーズ4 botに圧勝)/鷲巣席0〜12.5%。self-playが猫に偏り鷲巣の学習信号が薄い=リーグ戦・shaping・スケールで対処予定
 > - **ckpt非互換に注意**: catalog v2(圧倒カード対応)で行動空間が8052になり、旧ckpt(mac-500k)はresume不可(明示エラーが出る)。GPU学習はv2で新規に回す
 > - 次の作業候補: (1)6bのWindows実機セットアップ(ユーザー作業主体) (2)リーグ戦の設計・実装(Macで完結可能)

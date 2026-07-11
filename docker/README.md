@@ -63,7 +63,27 @@ docker compose -f docker/compose.yaml run -d train \
   `analysis/` 系のツールで可視化(必要になったら log.csv 用の簡易HTMLを追加)。
 - W&B / TensorBoard の導入は学習が本格化してから判断(DESIGN.md 13.3)。
 
-## 5. 注意
+## 5. トラブルシューティング(2026-07-11 実機セットアップで確認)
+
+- **MacからのSSHリモート実行**: 着地シェルはcmd.exeなので、WSL内コマンドは
+  `ssh <user>@<tailscale名> "wsl -d Ubuntu -e bash -lc \"<cmd>\""` の形にする
+  (内側は**ダブルクォート**。シングルクォートはcmd.exeが解釈せずbashに届かない)。
+- **WSLのデフォルトディストリ**: Docker Desktop導入後は `docker-desktop` が
+  デフォルトになることがある(bashなし)。`wsl --set-default Ubuntu` で戻すか、
+  常に `-d Ubuntu` を明示。
+- **WSL統合が反映されない**(Ubuntu内で `docker` not found): Docker Desktopの
+  再起動が必要。ウィンドウを閉じてもバックエンドが残るため、タスクトレイから
+  Quit → 再起動(確実なのはWindows再起動)。
+- **SSH経由のdocker pullが `error getting credentials` で失敗**: Windows資格情報
+  マネージャ(credsStore=desktop.exe)は対話ログオンセッションが必要でSSHからは
+  使えない。Ubuntu内 `~/.docker/config.json` から credsStore を外して解決済み
+  (バックアップ=config.json.bak)。公開イメージのpullに認証は不要。
+  Docker Hubへのloginが必要になったらWindows側の対話セッションで行うこと。
+- **管理者ユーザーのSSH鍵**: `~/.ssh/authorized_keys` ではなく
+  `C:\ProgramData\ssh\administrators_authorized_keys` に置く(ACL修正必須、
+  icaclsで Administrators/SYSTEM のみに)。
+
+## 6. 注意
 
 - ボトルネック想定はエンジン(純Python)のCPU側。GPU使用率が低い場合は
   `--num-envs` を増やす(収集がenv間バッチ推論のため、env数≒バッチ幅)。
