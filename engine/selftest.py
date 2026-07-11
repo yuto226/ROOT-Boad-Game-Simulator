@@ -32,6 +32,8 @@ from .actions import (
     ItemDamageDecision,
     ItemLimitDecision,
     MarquiseMarch,
+    MarquiseMarchDecision,
+    MarquiseSkipMove,
     OutrageDecision,
     OutragePay,
     SetupChooseKeep,
@@ -97,6 +99,8 @@ def test_battle_via_pending() -> None:
     dfs = state.fs(D)
     hand = tuple(c for c in dfs.hand if not state.cards.get(c).is_ambush)
     state = state.with_faction_state(dataclasses.replace(dfs, hand=hand))
+    # 猫の手札を空にして野戦病院(6.2.3)の割り込みを避ける(この検証の対象外)
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=()))
 
     before_m = state.clearing(1).soldier_count(M)
     before_d = state.clearing(1).soldier_count(D)
@@ -144,10 +148,8 @@ def test_ambush_via_pending() -> None:
     assert ambush_id is not None, "no ambush card def found"
     dfs = state.fs(D)
     state = state.with_faction_state(dataclasses.replace(dfs, hand=dfs.hand + (ambush_id,)))
-    # 攻撃側(猫)の手札から奇襲を除き、妨害選択肢を消す
-    mfs = state.fs(M)
-    state = state.with_faction_state(dataclasses.replace(
-        mfs, hand=tuple(c for c in mfs.hand if not state.cards.get(c).is_ambush)))
+    # 攻撃側(猫)の手札を空に: 妨害選択肢を消し、野戦病院(6.2.3)の割り込みも避ける
+    state = state.with_faction_state(dataclasses.replace(state.fs(M), hand=()))
 
     state = apply(state, DeclareBattle(player=M, clearing=1, defender=D), rng)
     assert state.pending and isinstance(state.pending[-1], AmbushDefenderDecision)
@@ -158,7 +160,13 @@ def test_ambush_via_pending() -> None:
     before_m = state.clearing(1).soldier_count(M)
     state = apply(state, ambush_acts[0], rng)
 
-    # 奇襲2ヒットは兵士へ自動適用(4.3.1.II)済み → 残ヒットの割り振りを解決
+    # 奇襲2ヒットは受け手(攻撃側=猫)が対象を選択する(4.3.1.II / 15.4)。roll_after=True
+    dec = state.pending[-1]
+    assert isinstance(dec, AllocateHitsDecision), "unexpected decision %r" % dec
+    assert dec.victim == M and dec.hits == 2 and dec.roll_after
+    # 兵士優先(4.3.4)で2ヒットを解決
+    state = apply(state, legal_actions(state)[0], rng)
+    state = apply(state, legal_actions(state)[0], rng)
     assert state.clearing(1).soldier_count(M) == before_m - 2, "ambush must deal 2 hits"
     steps = 0
     while state.pending:
@@ -350,6 +358,9 @@ def test_outrage_pay_from_hand() -> None:
     pay = [a for a in acts if isinstance(a, OutragePay) and a.card_id == match_card]
     assert pay, "matching outrage payment expected: %r" % acts
     state = apply(state, pay[0], rng)
+    # 蜂起(OutrageDecision)解決後に行軍の2移動目デシジョンが残る(15.2)→ スキップ
+    assert isinstance(state.pending[-1], MarquiseMarchDecision)
+    state = apply(state, MarquiseSkipMove(player=M), rng)
     assert not state.pending
     assert match_card not in state.fs(M).hand, "paid card leaves hand"
     assert state.alliance().supporters == (match_card,), "supporter box gains the card"
@@ -380,6 +391,9 @@ def test_outrage_auto_draw() -> None:
     acts = legal_actions(state)
     assert acts == [OutragePay(player=M, card_id=None)], "auto-draw only: %r" % acts
     state = apply(state, acts[0], rng)
+    # 行軍の2移動目デシジョンが残る(15.2)→ スキップして解決
+    assert isinstance(state.pending[-1], MarquiseMarchDecision)
+    state = apply(state, MarquiseSkipMove(player=M), rng)
     assert not state.pending
     assert state.fs(M).hand == hand_before, "payer hand unchanged on auto-draw"
     assert state.alliance().supporters == (deck_top,), "deck top enters supporter box"

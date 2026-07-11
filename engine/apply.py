@@ -31,6 +31,7 @@ from .actions import (
     DiscardCard,
     DiscardDecision,
     EndPhase,
+    FieldHospitalDecision,
     EyrieAddToDecree,
     EyrieChooseCorner,
     EyrieChooseLeader,
@@ -42,10 +43,13 @@ from .actions import (
     EyrieSkipDecree,
     EyrieTurmoil,
     MarquiseBuild,
+    MarquiseFieldHospital,
     MarquiseLabor,
     MarquiseMarch,
+    MarquiseMarchDecision,
     MarquisePlayBirdCard,
     MarquiseRecruit,
+    MarquiseSkipMove,
     ItemDamageDecision,
     ItemLimitDecision,
     OutragePay,
@@ -244,16 +248,57 @@ def _apply_recruit(state: GameState, action: MarquiseRecruit, rng) -> GameState:
 
 
 def _apply_march(state: GameState, action: MarquiseMarch, rng) -> GameState:
-    """行軍の1移動(6.5.2, 4.2)。フェーズ1簡略化: 1行軍=1移動。"""
+    """行軍の1移動(6.5.2, 4.2)。1行軍アクションで最大2移動。
+
+    pending 先頭が ``MarquiseMarchDecision`` なら2移動目(応答)としてアクションを
+    消費せず pop する。そうでなければ1移動目としてアクション1を消費し、先に
+    ``MarquiseMarchDecision`` を積んでから移動を実行する(移動が蜂起 8.2.6 の
+    ``OutrageDecision`` を積む場合、それがスタック上に載り先に解決される。push順が
+    重要, 15.2)。
+    """
+    if state.pending and isinstance(state.pending[-1], MarquiseMarchDecision):
+        state = state.pop_pending()  # 2移動目: アクション消費なし
+    else:
+        state = _spend_action(state)  # 1移動目: アクション1消費
+        state = state.push_pending(MarquiseMarchDecision(actor=FactionId.MARQUISE))
     src = state.clearing(action.src)
     assert src.soldier_count(FactionId.MARQUISE) >= action.count
     state = state.with_clearing(src.add_soldiers(FactionId.MARQUISE, -action.count))
     dst = state.clearing(action.dst).add_soldiers(FactionId.MARQUISE, action.count)
     state = state.with_clearing(dst)
-    state = _spend_action(state)
     # 支持広場への兵士移動 → 蜂起(8.2.6)。連合不参加/非支持広場なら no-op
     state = alliance_mod.outrage_on_move(state, FactionId.MARQUISE, action.dst, rng)
     return state
+
+
+def _apply_skip_move(state: GameState, action: MarquiseSkipMove, rng) -> GameState:
+    """行軍の2移動目を行わない(6.5.2)。MarquiseMarchDecision を pop するのみ。"""
+    assert state.pending and isinstance(state.pending[-1], MarquiseMarchDecision)
+    return state.pop_pending()
+
+
+def _apply_field_hospital(state: GameState, action: MarquiseFieldHospital,
+                          rng) -> GameState:
+    """野戦病院(6.2.3)の応答。一致カード消費で除去兵士を城砦広場へ、None は不使用。
+
+    どちらの場合も奇襲2ヒット後のロール継続(4.3.1.II)を後処理する(15.3)。
+    """
+    dec = state.pending[-1]
+    assert isinstance(dec, FieldHospitalDecision)
+    state = state.pop_pending()
+    if action.card_id is not None:
+        from .factions.marquise import _keep_clearing
+        state = discard_card(state, FactionId.MARQUISE, action.card_id)
+        keep_cid = _keep_clearing(state)
+        assert keep_cid >= 0, "field hospital without keep on map"
+        # remove_piece で既にサプライへ戻っている兵士を城砦広場へ取り出す(6.2.3)
+        ms = state.marquise()
+        take = min(dec.count, ms.soldiers_supply)
+        state = state.with_clearing(
+            state.clearing(keep_cid).add_soldiers(FactionId.MARQUISE, take))
+        state = state.with_faction_state(dataclasses.replace(
+            state.marquise(), soldiers_supply=state.marquise().soldiers_supply - take))
+    return battle_mod._continue_roll_after(state, dec.ctx, dec.roll_after, rng)
 
 
 def _apply_labor(state: GameState, action: MarquiseLabor, rng) -> GameState:
@@ -375,6 +420,8 @@ _HANDLERS = {
     MarquiseBuild: _apply_build,
     MarquiseRecruit: _apply_recruit,
     MarquiseMarch: _apply_march,
+    MarquiseSkipMove: _apply_skip_move,
+    MarquiseFieldHospital: _apply_field_hospital,
     MarquiseLabor: _apply_labor,
     MarquisePlayBirdCard: _apply_play_bird,
     DeclareBattle: _apply_declare_battle,

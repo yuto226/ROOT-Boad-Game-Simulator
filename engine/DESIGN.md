@@ -962,3 +962,102 @@ vagabond(悪名・探索・援助・クエスト・クラフト)の**全11箇所
 selftest 新シナリオの結果 / pytest 全件 / 4派閥 smoke 100試合 --validate クラッシュゼロ
 / 4派閥ランダムbot対戦で圧倒勝利・共闘勝利が実際に発生した回数(発生ゼロなら要調査)
 / レビュー注目点(ファイル:行)
+
+## 15. ルール完全性B: 猫の簡略化バッチ(Fable 2026-07-11。実装者はこの設計に従うこと)
+
+ルールの正: `rules/cat.md` 6.2.2 / 6.2.3 / 6.5.2、`rules/common.md` 4.3.1.II / 2.1.1。
+4項目を一括で解消する。既存の decision パターン(3.2)を踏襲し、新規ファイルは作らない。
+
+### 15.1 城砦の配置禁止(6.2.2)
+
+- `GameState` にヘルパ **`placement_blocked(faction, cid) -> bool`** を追加:
+  「faction が猫以外」かつ「cid に猫の城砦トークン(T_KEEP)がある」とき True。
+- **配置(placement)のみ禁止。移動は合法**(6.2.2 明文)。適用箇所は候補生成のみ:
+  - 鷲巣: `EyriePlaceRoost`(7.4.3)と `EyrieDecreeBuild`(7.5.2.IV)の対象広場
+  - 連合: `AllianceSpreadSympathy`(8.4.2、戒厳令分岐含む)と `AllianceRevolt`(8.4.1、
+    支持が置けない以上実質発生しないが防御的に)
+  - 鷲巣の募兵・連合の作戦募兵は止まり木/拠点の存在が前提で、それら自体が
+    置けなくなるため対応不要(理由をコメントに残す)
+- **既存 xfail テスト(tests/test_marquise.py)はルール誤読**(移動を違法と主張して
+  いるが 6.2.2 は「そこへ移動させることは可能」)。xfail を外して**削除し**、正しい
+  2テストに差し替える: (a) 城砦広場への `AllianceSpreadSympathy` が非合法
+  (b) 城砦広場への移動(AllianceOpMove)は合法
+
+### 15.2 行軍=2移動まで(6.5.2)
+
+- 新 Decision **`MarquiseMarchDecision(actor=猫)`**(任意の2移動目)+
+  新 Action **`MarquiseSkipMove`**(パラメータなし=2移動目を行わない)。
+- `apply(MarquiseMarch)` を分岐:
+  - pending 先頭が `MarquiseMarchDecision` → pop して移動のみ実行(アクション消費なし)
+  - 通常(1移動目)→ アクション1消費 → **先に** `MarquiseMarchDecision` を push →
+    移動を実行(移動が蜂起 8.2.6 の OutrageDecision を積む場合、それがスタック上に
+    載り先に解決される。push順が重要)
+- `legal.py` の decision 分岐: `MarquiseMarchDecision` → 既存の行軍候補生成
+  (marquise._march_actions)+ `MarquiseSkipMove`。候補ゼロでも skip があるので詰まない。
+- `MarquiseSkipMove` の適用 = pop のみ。
+
+### 15.3 野戦病院(6.2.3)
+
+トリガーは「猫兵士が1つの広場から除去された」**イベント単位**(1枚のカードで
+そのイベントの除去兵士全てを城砦広場へ)。エンジンは1個ずつ除去するため、
+イベント境界で集計して1回だけ決定を出す:
+
+- `AllocateHitsDecision` にフィールド追加: `ctx: BattleCtx=None` / `roll_after: bool=False`
+  / `removed_soldiers: int=0`(このデシジョン処理中に除去した猫兵士数)。
+- `battle.allocate_hit`: victim=猫 かつ兵士除去なら removed_soldiers を+1して積み直す。
+  デシジョンが尽きたら(残ヒット0 or 配置物なし)**`_finish_allocation(state, dec, rng)`**:
+  1. victim=猫 かつ removed_soldiers>0 → `maybe_field_hospital(...)`(下記)が
+     デシジョンを積んだら ctx/roll_after を引き継いで return
+  2. `roll_after=True` かつ戦場に攻撃側兵士が残っている → `roll_battle(ctx)`
+     (全滅なら戦闘終了=4.3.1.II)
+- 新 Decision **`FieldHospitalDecision(actor=猫, clearing, count, ctx=None, roll_after=False)`**
+  + 新 Action **`MarquiseFieldHospital(card_id: Optional[str])`**(None=使わない。
+  AmbushChoice と同パターン)。
+- `marquise.maybe_field_hospital(state, clearing, count, ctx=None, roll_after=False)`:
+  城砦がマップ上にあり、手札に一致カード(広場の動物種 or 鳥=ワイルド 2.1.1)が
+  あるときだけ FieldHospitalDecision を push(なければ no-op を返し、呼び元が
+  roll_after を処理)。選択肢 = 一致カード(base_id で dedup)+ None。
+- 適用: カードあり → discard_card(3.3.3経由)+ サプライから count 個を城砦広場へ
+  配置(remove_piece で既にサプライへ戻っている分を取り出す)。None → 何もしない。
+  いずれも後処理として 15.3-2 と同じ roll_after 判定を行う。
+- **戦闘以外のイベント**にも適用(6.2.3 は除去全般):
+  - 連合の反乱(alliance._remove_all_enemies): ループで除去した猫兵士数を集計し、
+    最後に maybe_field_hospital(clearing, count)
+  - 部族の狙撃(vagabond.apply_strike): 猫兵士1除去なら maybe_field_hospital(count=1)
+
+### 15.4 奇襲2ヒットの除去対象選択(4.3.1.II)
+
+- `_apply_ambush_hits` の非放浪部族分岐を `_auto_remove`(兵士優先の自動選択)から
+  **`AllocateHitsDecision(actor=攻撃側, victim=攻撃側, hits=2, source=防御側,
+  clearing, ctx=ctx, roll_after=True)`** の push に変更(4.3.4 の兵士優先制約は
+  allocate_options が既に強制する)。
+- 解決後の継続は 15.3 の `_finish_allocation` に統合: 攻撃側兵士が戦場に残っていれば
+  ロールへ、全滅なら戦闘終了。猫が攻撃側なら野戦病院(15.3)が間に挟まり、
+  病院で城砦へ戻した兵士は戦場にいないため全滅判定はそのまま正しい。
+- 放浪部族攻撃側の既存分岐(ItemDamageDecision + roll_after)は変更しない。
+
+### 15.5 RL追随(別タスク。フェーズRメモの手順=5247e50 が手本)
+
+- catalog: `MarquiseSkipMove`=(型名,) / `MarquiseFieldHospital`=(型名, base_id or None)。
+  `CATALOG_VERSION = 3`。
+- encoder: `_DECISION_TYPES` に `MarquiseMarchDecision` / `FieldHospitalDecision` を追加。
+
+### 15.6 検証(selftest 追加+pytest 差し替え)
+
+1. 行軍: 1回の MarquiseMarch でアクション1消費 → 2移動目の選択肢(+skip)が出る →
+   2移動目はアクション消費なし / skip で通常進行
+2. 野戦病院: 戦闘で猫兵士2除去 → 一致カード支払いで城砦広場に2個出現・カードは捨て山 /
+   None 選択でサプライのまま
+3. 野戦病院の前提: 城砦除去済み or 一致カードなしではデシジョン自体が出ない
+4. 奇襲: 受け手(攻撃側)が2ヒットの対象を選択(兵士優先)→ 生存ならロール継続、
+   全滅なら戦闘終了
+5. 城砦: 支持拡大・止まり木配置(EyriePlaceRoost/EyrieDecreeBuild)が城砦広場で
+   候補から消える / 移動は合法(15.1 の差し替えテスト)
+6. 既存 pytest 全パス(xfail は差し替えで消える)+ 4派閥 smoke 100試合 --validate +
+   並列/直列の決定性一致
+
+### 15.7 完了条件(subagent の報告に含めること)
+
+selftest 新シナリオ結果 / pytest 全件(xfail 0 になること) / smoke 100試合 /
+決定性検証 / ランダム4派閥での野戦病院発動回数・行軍2移動使用率(参考値) /
+レビュー注目点(ファイル:行)

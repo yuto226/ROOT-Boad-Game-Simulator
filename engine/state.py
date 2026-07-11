@@ -376,6 +376,17 @@ class GameState:
     def controls(self, faction: FactionId, cid: int) -> bool:
         return self.controller(cid) == faction
 
+    # --- 城砦の配置禁止(6.2.2) ---
+    def placement_blocked(self, faction: FactionId, cid: int) -> bool:
+        """猫以外は城砦トークンのある広場に配置物を配置できない(6.2.2)。
+
+        配置(placement)のみが禁止で、移動(4.2)は合法。候補生成側で
+        「配置」の判定にのみ用いること(共通ルール0節 Q4)。
+        """
+        if faction == FactionId.MARQUISE:
+            return False
+        return self.clearing(cid).has_token(FactionId.MARQUISE, T_KEEP)
+
     # --- 更新ヘルパ ---
     def replace(self, **kwargs) -> "GameState":
         return dataclasses.replace(self, **kwargs)

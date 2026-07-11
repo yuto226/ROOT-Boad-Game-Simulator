@@ -851,7 +851,15 @@ def apply_strike(state: GameState, action: VagabondStrike, rng) -> GameState:
     c = vs.pawn_clearing
     items = _pay(vs.items, CROSSBOW)
     state = state.with_faction_state(replace(vs, items=items))
-    return battle_mod.remove_piece(state, c, action.faction, action.target, VAGABOND, battle=False)
+    state = battle_mod.remove_piece(state, c, action.faction, action.target, VAGABOND, battle=False)
+    # 野戦病院(6.2.3): 戦闘外の除去にも適用。狙撃で猫兵士1個を除去したイベント。
+    if (action.faction == FactionId.MARQUISE and action.target[0] == "soldier"
+            and FactionId.MARQUISE in state.factions):
+        from . import marquise as marquise_mod
+        pushed = marquise_mod.maybe_field_hospital(state, c, 1)
+        if pushed is not None:
+            state = pushed
+    return state
 
 
 def apply_repair(state: GameState, action: VagabondRepair, rng) -> GameState:

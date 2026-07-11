@@ -17,6 +17,8 @@ from .actions import (
     AmbushDefenderDecision,
     DiscardCard,
     DiscardDecision,
+    FieldHospitalDecision,
+    MarquiseMarchDecision,
     EyrieDecreeDecision,
     EyrieLeaderDecision,
     EyrieRoostDecision,
@@ -156,6 +158,16 @@ def _decision_options(state: GameState) -> List[Action]:
     if isinstance(dec, AllocateHitsDecision):
         # ヒット割り振り(4.3.4)
         return allocate_options(state, dec)
+
+    if isinstance(dec, MarquiseMarchDecision):
+        # 行軍の2移動目(6.5.2): 移動候補 + スキップ
+        from .factions import marquise
+        return marquise.march_decision_options(state)
+
+    if isinstance(dec, FieldHospitalDecision):
+        # 野戦病院(6.2.3): 使わない(None)+ 一致カード各種
+        from .factions import marquise
+        return marquise.field_hospital_options(state, dec)
 
     if isinstance(dec, EyrieSetupCornerDecision):
         # 開始時広場の隅(7.3.2)

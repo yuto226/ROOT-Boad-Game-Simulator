@@ -9,7 +9,12 @@ import dataclasses
 
 import pytest
 
-from engine.actions import AllianceOpMove, MarquiseBuild, MarquiseRecruit
+from engine.actions import (
+    AllianceOpMove,
+    AllianceSpreadSympathy,
+    MarquiseBuild,
+    MarquiseRecruit,
+)
 from engine.apply import apply
 from engine.factions import get_logic
 from engine.types import (
@@ -158,14 +163,28 @@ def test_recruit_partial_placement_when_supply_insufficient():
 
 
 # ---------------- 5. 城砦(6.2.1/6.2.2) ----------------
-@pytest.mark.xfail(reason=(
-    "城砦広場への他派閥駒配置禁止(6.2.2)は未実装。engine/factions/marquise.py の"
-    "_march_actions と engine/factions/alliance.py の _opmove_options はいずれも"
-    "T_KEEP を一切参照せず、支配条件(4.2.1)のみで移動可否を決めている(grep 確認済み: "
-    "T_KEEP を参照するのは apply.py の城砦設置と factions/eyrie.py の隅選択回避のみ)。"
-    "DESIGN.md 9章冒頭の既知の簡略化に該当するためテストは通らない想定。"))
-def test_keep_clearing_blocks_enemy_movement():
-    """城砦 6.2.1/6.2.2: 城砦広場には他派閥が駒を置けない(移動先として違法)。"""
+def test_keep_clearing_blocks_sympathy_placement():
+    """城砦 6.2.2: 城砦広場への支持拡大(配置)は他派閥にとって非合法。"""
+    state, rng = make_state((M, A))
+    state = state.replace(turn_index=state.factions.index(A))  # 鳥歌(8.4)は連合の手番
+    keep_cid = next(
+        cs.cid for cs in state.clearings
+        if any(p.faction == M and p.kind == T_KEEP for p in cs.tokens))
+    suit = state.map.clearing(keep_cid).suit
+    cost = state.board_defs["alliance"]["sympathy_costs"][0]
+    cards = [d.id for d in state.cards.defs if not d.is_dominance and d.suit == suit][:cost]
+    assert len(cards) >= cost
+
+    als = state.alliance()
+    state = state.with_faction_state(dataclasses.replace(
+        als, placed_sympathy=0, supporters=tuple(cards)))
+
+    action = AllianceSpreadSympathy(player=A, clearing=keep_cid)
+    assert_illegal(state, action)
+
+
+def test_keep_clearing_allows_enemy_movement():
+    """城砦 6.2.2: 城砦広場への移動そのものは合法(「そこへ移動させることは可能」)。"""
     state, rng = make_state((M, A))
     keep_cid = next(
         cs.cid for cs in state.clearings
@@ -181,5 +200,4 @@ def test_keep_clearing_blocks_enemy_movement():
     state = state.replace(phase=Phase.EVENING, turn_index=state.factions.index(A))
 
     action = AllianceOpMove(player=A, src=adj_cid, dst=keep_cid, count=1)
-    # 本来は6.2.2で違法のはずだが、実装は支配条件のみを見るため実際は合法になる。
-    assert_illegal(state, action)
+    assert_legal(state, action)

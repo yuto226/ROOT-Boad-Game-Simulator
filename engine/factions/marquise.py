@@ -15,11 +15,14 @@ from ..actions import (
     DeclareBattle,
     DiscardDecision,
     EndPhase,
+    FieldHospitalDecision,
     MarquiseBuild,
+    MarquiseFieldHospital,
     MarquiseLabor,
     MarquiseMarch,
     MarquisePlayBirdCard,
     MarquiseRecruit,
+    MarquiseSkipMove,
 )
 from ..crafting import legal_crafts
 from ..mechanics import draw_cards
@@ -33,6 +36,7 @@ from ..types import (
     Phase,
     Piece,
     Suit,
+    T_KEEP,
     T_WOOD,
 )
 from . import FactionLogic, register
@@ -82,6 +86,83 @@ def visible_card_icons(state: GameState) -> int:
     slots = state.board_defs["marquise"]["card_icon_slots"].get("recruiter", [])
     built = ms.built_recruiter
     return sum(1 for v in slots if built >= v + 1)
+
+
+# ---------------- 行軍(6.5.2, 2移動まで) ----------------
+def _march_moves(state: GameState) -> List[Action]:
+    """行軍の1移動ぶんの候補(4.2.1: 移動元か移動先を支配)。"""
+    out: List[Action] = []
+    for cs in state.clearings:
+        n = cs.soldier_count(MARQUISE)
+        if n <= 0:
+            continue
+        src = cs.cid
+        for dst in state.map.clearing(src).adjacent:
+            if not (state.controls(MARQUISE, src) or state.controls(MARQUISE, dst)):
+                continue
+            for count in range(1, n + 1):
+                out.append(MarquiseMarch(player=MARQUISE, src=src, dst=dst, count=count))
+    return out
+
+
+def march_decision_options(state: GameState) -> List[Action]:
+    """行軍の2移動目の選択肢(6.5.2)。移動候補 + スキップ。
+
+    候補ゼロでもスキップがあるため詰まらない(DESIGN.md 15.2)。
+    """
+    return _march_moves(state) + [MarquiseSkipMove(player=MARQUISE)]
+
+
+# ---------------- 野戦病院(6.2.3) ----------------
+def _keep_clearing(state: GameState) -> int:
+    """城砦トークンがマップ上にある広場ID(なければ -1)。"""
+    for cs in state.clearings:
+        if cs.has_token(MARQUISE, T_KEEP):
+            return cs.cid
+    return -1
+
+
+def _hospital_cards(state: GameState, clearing: int) -> List[str]:
+    """除去元広場と一致する手札カード(鳥=ワイルド 2.1.1)を base_id で dedup。"""
+    suit = state.map.clearing(clearing).suit
+    out: List[str] = []
+    seen = set()
+    for cid in state.marquise().hand:
+        cs_suit = state.cards.suit_of(cid)
+        if cs_suit != suit and cs_suit != Suit.BIRD:
+            continue
+        base = state.cards.base_id(cid)
+        if base in seen:
+            continue
+        seen.add(base)
+        out.append(cid)
+    return out
+
+
+def maybe_field_hospital(state: GameState, clearing: int, count: int,
+                         ctx=None, roll_after: bool = False):
+    """野戦病院(6.2.3)の発動判定。
+
+    城砦がマップ上にあり、除去元広場と一致するカードが手札にあるときだけ
+    ``FieldHospitalDecision`` を積んだ新しい状態を返す。前提を満たさなければ
+    ``None`` を返す(呼び元が roll_after を処理する)。
+    """
+    if _keep_clearing(state) < 0:
+        return None
+    if not _hospital_cards(state, clearing):
+        return None
+    return state.push_pending(FieldHospitalDecision(
+        actor=MARQUISE, clearing=clearing, count=count,
+        ctx=ctx, roll_after=roll_after))
+
+
+def field_hospital_options(state: GameState,
+                           dec: FieldHospitalDecision) -> List[Action]:
+    """野戦病院の選択肢(6.2.3)。使わない(None)+ 一致カード各種。"""
+    out: List[Action] = [MarquiseFieldHospital(player=MARQUISE, card_id=None)]
+    for cid in _hospital_cards(state, dec.clearing):
+        out.append(MarquiseFieldHospital(player=MARQUISE, card_id=cid))
+    return out
 
 
 # ---------------- ロジック ----------------
@@ -179,19 +260,8 @@ class MarquiseLogic(FactionLogic):
         return [MarquiseRecruit(player=MARQUISE)]
 
     def _march_actions(self, state: GameState) -> List[Action]:
-        out: List[Action] = []
-        for cs in state.clearings:
-            n = cs.soldier_count(MARQUISE)
-            if n <= 0:
-                continue
-            src = cs.cid
-            for dst in state.map.clearing(src).adjacent:
-                # 移動条件(4.2.1): 移動元か移動先を支配
-                if not (state.controls(MARQUISE, src) or state.controls(MARQUISE, dst)):
-                    continue
-                for count in range(1, n + 1):
-                    out.append(MarquiseMarch(player=MARQUISE, src=src, dst=dst, count=count))
-        return out
+        # 1移動目の候補(6.5.2)。2移動目は MarquiseMarchDecision 経由(15.2)。
+        return _march_moves(state)
 
     def _labor_actions(self, state: GameState) -> List[Action]:
         out: List[Action] = []

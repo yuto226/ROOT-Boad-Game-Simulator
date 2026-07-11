@@ -171,9 +171,12 @@ def roost_candidates(state: GameState) -> List[int]:
     空き建物枠のある広場(=止まり木を配置できる広場)のうち、
     全派閥合計の兵士コマ数が最少のもの。配置できない広場は選べない。
     候補なしならこのステップはスキップされる。
+
+    城砦トークンのある広場は猫以外は配置不可(6.2.2)なので候補から除く。
     """
     eligible = [cs.cid for cs in state.clearings
-                if cs.occupied_slots() < state.map.clearing(cs.cid).slots]
+                if cs.occupied_slots() < state.map.clearing(cs.cid).slots
+                and not state.placement_blocked(EYRIE, cs.cid)]
     if not eligible:
         return []
     m = min(state.clearing(c).total_soldiers() for c in eligible)
@@ -210,6 +213,8 @@ def _recruit_options(state: GameState, es: EyrieState, card: str) -> List[Action
     """募兵(7.5.2.I): 止まり木があり一致する広場に兵士1(カリスマ2, 7.8.2)。
 
     サプライが必要数未満なら実行不能=内乱(公式裁定)。
+    城砦(6.2.2)の考慮は不要: 募兵先は止まり木のある広場に限られ、城砦広場には
+    そもそも止まり木を置けない(roost_candidates/_build_options で除外済み)ため。
     """
     need = 2 if es.leader == "charismatic" else 1
     if es.soldiers_supply < need:
@@ -272,6 +277,8 @@ def _build_options(state: GameState, es: EyrieState, card: str) -> List[Action]:
             continue
         if not state.controls(EYRIE, cs.cid):
             continue
+        if state.placement_blocked(EYRIE, cs.cid):
+            continue  # 城砦のある広場は配置不可(6.2.2)
         out.append(EyrieDecreeBuild(player=EYRIE, card_id=card, clearing=cs.cid))
     return out
 

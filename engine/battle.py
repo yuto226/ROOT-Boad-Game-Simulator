@@ -178,30 +178,6 @@ def _has_pieces(state: GameState, clearing: int, faction: FactionId) -> bool:
     return any(p.faction == faction for p in cs.buildings + cs.tokens)
 
 
-def _auto_target(state: GameState, clearing: int, victim: FactionId) -> Optional[Tuple]:
-    """自動除去用の対象選択(兵士優先, 4.3.4)。"""
-    cs = state.clearing(clearing)
-    if cs.soldier_count(victim) > 0:
-        return ("soldier",)
-    bs = cs.buildings_of(victim)
-    if bs:
-        return ("building", bs[0].kind)
-    ts = cs.tokens_of(victim)
-    if ts:
-        return ("token", ts[0].kind)
-    return None
-
-
-def _auto_remove(state: GameState, clearing: int, victim: FactionId,
-                 source: Optional[FactionId], hits: int) -> GameState:
-    for _ in range(hits):
-        t = _auto_target(state, clearing, victim)
-        if t is None:
-            break
-        state = remove_piece(state, clearing, victim, t, source)
-    return state
-
-
 # ---------------- ダイスとヒット割り振り ----------------
 def _hits_decision(state: GameState, ctx: BattleCtx, victim: FactionId,
                    source: FactionId, hits: int):
@@ -341,16 +317,21 @@ def _apply_ambush_hits(state: GameState, ctx: BattleCtx, rng) -> GameState:
     攻撃側が放浪部族なら2ヒット=アイテム2損傷(9.2.7、選択は Decision)。
     放浪者コマは除去されない(9.2.2)ため「全滅で戦闘終了」は発生せず、
     損傷解決後にロールへ継続する(roll_after=True)。
+
+    非放浪部族の攻撃側は、2ヒットの除去対象を受け手自身が選択する
+    (4.3.4 の兵士優先は allocate_options が強制, 15.4)。解決後の継続
+    (生存ならロール、全滅なら戦闘終了)は :func:`_finish_allocation` に集約する。
     """
     if _is_vagabond(state, ctx.attacker):
         if _vagabond_can_take_hits(state):
             return state.push_pending(ItemDamageDecision(
                 actor=ctx.attacker, remaining=2, ctx=ctx, roll_after=True))
         return _roll_and_allocate(state, ctx, rng)  # 損傷可能なアイテムなし → 無視
-    state = _auto_remove(state, ctx.clearing, ctx.attacker, ctx.defender, 2)
-    if state.clearing(ctx.clearing).soldier_count(ctx.attacker) == 0:
-        return state  # 攻撃側のコマ全滅 → 戦闘終了(4.3.1.II)
-    return _roll_and_allocate(state, ctx, rng)
+    if _has_pieces(state, ctx.clearing, ctx.attacker):
+        return state.push_pending(AllocateHitsDecision(
+            actor=ctx.attacker, victim=ctx.attacker, hits=2, source=ctx.defender,
+            clearing=ctx.clearing, ctx=ctx, roll_after=True))
+    return _roll_and_allocate(state, ctx, rng)  # 除去できるコマなし → ロールへ
 
 
 def allocate_hit(state: GameState, action: AllocateHit, rng) -> GameState:
@@ -360,14 +341,53 @@ def allocate_hit(state: GameState, action: AllocateHit, rng) -> GameState:
     森林連合の蜂起(8.2.6)や拠点喪失時の支援者調整(8.2.4)で新たな
     デシジョンを pending に積むことがあるため、pop を除去より後に行うと
     スタック先頭を取り違える。継続の割り振りは除去後に積み直す。
+
+    デシジョンが尽きたら(残ヒット0 or 配置物なし)イベント境界処理
+    :func:`_finish_allocation` へ委ねる(野戦病院 6.2.3・奇襲後のロール継続
+    4.3.1.II)。猫兵士の除去数は ``removed_soldiers`` に集計する(6.2.3)。
     """
     dec = state.pending[-1]
     state = state.pop_pending()
+    is_soldier = action.target[0] == "soldier"
     state = remove_piece(state, dec.clearing, dec.victim, action.target, dec.source)
+    removed = dec.removed_soldiers + (
+        1 if (is_soldier and dec.victim == FactionId.MARQUISE) else 0)
     remaining = dec.hits - 1
     if remaining > 0 and _has_pieces(state, dec.clearing, dec.victim):
-        state = state.push_pending(dataclasses.replace(dec, hits=remaining))
+        return state.push_pending(
+            dataclasses.replace(dec, hits=remaining, removed_soldiers=removed))
+    return _finish_allocation(
+        state, dataclasses.replace(dec, removed_soldiers=removed), rng)
+
+
+def _continue_roll_after(state: GameState, ctx, roll_after: bool, rng) -> GameState:
+    """奇襲2ヒット(4.3.1.II)後のロール継続。
+
+    攻撃側の兵士が戦場に残っていればロールへ(4.3.2)、全滅なら戦闘終了。
+    野戦病院(6.2.3)で城砦へ戻した兵士は戦場にいないため全滅判定は正しい。
+    """
+    if roll_after and ctx is not None:
+        if state.clearing(ctx.clearing).soldier_count(ctx.attacker) > 0:
+            return roll_battle(state, ctx, rng)
     return state
+
+
+def _finish_allocation(state: GameState, dec: AllocateHitsDecision, rng) -> GameState:
+    """割り振りデシジョン完了時のイベント境界処理(6.2.3 / 4.3.1.II, 15.3)。
+
+    1. 受け手=猫かつ兵士除去ありなら野戦病院(6.2.3)を1回だけ判定する。
+       デシジョンが積まれたら ctx/roll_after を引き継いで return(ロール継続は
+       病院解決後に行われる)。
+    2. そうでなければ奇襲後のロール継続(4.3.1.II)を処理する。
+    """
+    if dec.victim == FactionId.MARQUISE and dec.removed_soldiers > 0:
+        from .factions import marquise as marquise_mod
+        pushed = marquise_mod.maybe_field_hospital(
+            state, dec.clearing, dec.removed_soldiers,
+            ctx=dec.ctx, roll_after=dec.roll_after)
+        if pushed is not None:
+            return pushed
+    return _continue_roll_after(state, dec.ctx, dec.roll_after, rng)
 
 
 def allocate_options(state: GameState, dec: AllocateHitsDecision) -> List[AllocateHit]:

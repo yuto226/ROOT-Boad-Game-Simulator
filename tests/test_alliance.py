@@ -67,7 +67,8 @@ def test_spread_sympathy_progressive_cost():
     state, rng = make_state((M, A))
     state = state.replace(turn_index=state.factions.index(A))  # 鳥歌(8.4)は連合の手番
     costs = state.board_defs["alliance"]["sympathy_costs"]
-    target = next(cs.cid for cs in state.clearings if not cs.has_token(A, T_SYMPATHY))
+    target = next(cs.cid for cs in state.clearings
+                  if not cs.has_token(A, T_SYMPATHY) and not state.placement_blocked(A, cs.cid))
     suit = state.map.clearing(target).suit
 
     need_at_0 = costs[0]
@@ -99,7 +100,8 @@ def test_spread_sympathy_insufficient_matching_supporters_illegal():
     state, rng = make_state((M, A))
     state = state.replace(turn_index=state.factions.index(A))
     costs = state.board_defs["alliance"]["sympathy_costs"]
-    target = next(cs.cid for cs in state.clearings if not cs.has_token(A, T_SYMPATHY))
+    target = next(cs.cid for cs in state.clearings
+                  if not cs.has_token(A, T_SYMPATHY) and not state.placement_blocked(A, cs.cid))
     suit = state.map.clearing(target).suit
     other_suit = next(s for s in CLEARING_SUITS if s != suit)
     need = costs[0]
@@ -120,7 +122,8 @@ def test_martial_law_increases_spread_cost():
     """戒厳令 8.4.2.II.a: 対象広場に連合以外の1派閥が兵士3個以上で支持拡大コスト+1。"""
     state, rng = make_state((M, A))
     state = state.replace(turn_index=state.factions.index(A))
-    target = next(cs.cid for cs in state.clearings if not cs.has_token(A, T_SYMPATHY))
+    target = next(cs.cid for cs in state.clearings
+                  if not cs.has_token(A, T_SYMPATHY) and not state.placement_blocked(A, cs.cid))
     suit = state.map.clearing(target).suit
     base_cost = state.board_defs["alliance"]["sympathy_costs"][0]
 

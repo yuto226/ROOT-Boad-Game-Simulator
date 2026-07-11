@@ -83,12 +83,30 @@ class MarquiseRecruit(Action):
 class MarquiseMarch(Action):
     """行軍アクションの1移動(6.5.2, 4.2)。
 
-    フェーズ1簡略化: 行軍1回につき1移動のみ(本来は2移動まで)。
+    行軍は最大2移動(6.5.2)。1移動目はアクションを消費し
+    ``MarquiseMarchDecision`` を積む。2移動目は同アクションの応答として
+    実行され、アクションは消費しない(apply 側で pending 先頭型で判別)。
     """
 
     src: int
     dst: int
     count: int
+
+
+@dataclass(frozen=True)
+class MarquiseSkipMove(Action):
+    """行軍の2移動目を行わない(6.5.2)。``MarquiseMarchDecision`` の応答。"""
+
+
+@dataclass(frozen=True)
+class MarquiseFieldHospital(Action):
+    """野戦病院(6.2.3)。card_id=None は使わない(AmbushChoice と同パターン)。
+
+    一致カード(除去元広場の動物種 or 鳥=ワイルド 2.1.1)を消費すると、
+    直前に除去された猫兵士を城砦広場へ配置する。
+    """
+
+    card_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -434,12 +452,42 @@ class AmbushAttackerDecision(Decision):
 
 @dataclass(frozen=True)
 class AllocateHitsDecision(Decision):
-    """ヒットの割り振り(4.3.4)。actor=victim が自コマを除去する。"""
+    """ヒットの割り振り(4.3.4)。actor=victim が自コマを除去する。
+
+    ``ctx``/``roll_after`` は奇襲2ヒット(4.3.1.II)の後にロールへ継続する
+    ための情報(4.3.4 の兵士優先は allocate_options が強制する)。
+    ``removed_soldiers`` はこのデシジョン処理中に除去した猫兵士数で、
+    イベント境界で野戦病院(6.2.3)を1回だけ発動するための集計に使う。
+    """
 
     victim: FactionId = None
     hits: int = 0
     source: FactionId = None    # ヒットを与えた側(建物/トークン除去VPの受け手)
     clearing: int = 0
+    ctx: BattleCtx = None
+    roll_after: bool = False
+    removed_soldiers: int = 0
+
+
+@dataclass(frozen=True)
+class MarquiseMarchDecision(Decision):
+    """行軍の2移動目の機会(6.5.2)。actor=猫。応答は MarquiseMarch か
+    MarquiseSkipMove。移動しても追加のアクションは消費しない。"""
+
+
+@dataclass(frozen=True)
+class FieldHospitalDecision(Decision):
+    """野戦病院(6.2.3)。actor=猫。除去された猫兵士 count 個を城砦広場へ
+    戻すか(一致カード消費)否かを選ぶ。
+
+    ``ctx``/``roll_after`` は奇襲2ヒット(4.3.1.II)後のロール継続を
+    病院解決後に引き継ぐための情報。
+    """
+
+    clearing: int = 0
+    count: int = 0
+    ctx: BattleCtx = None
+    roll_after: bool = False
 
 
 @dataclass(frozen=True)

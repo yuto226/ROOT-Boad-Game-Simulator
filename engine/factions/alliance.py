@@ -263,6 +263,8 @@ def _revolt_options(state: GameState) -> List[Action]:
             continue
         if not cs.has_token(ALLIANCE, T_SYMPATHY):
             continue
+        if state.placement_blocked(ALLIANCE, cs.cid):
+            continue  # 城砦のある広場には拠点を配置できない(6.2.2, 防御的)
         own_after = len(cs.buildings_of(ALLIANCE)) + (1 if cs.ruin else 0)
         if own_after >= cl.slots:
             continue  # 敵建物除去後も拠点を置く枠がない
@@ -289,6 +291,8 @@ def _spread_options(state: GameState) -> List[Action]:
                    if not cs.has_token(ALLIANCE, T_SYMPATHY)}
     out: List[Action] = []
     for cid in sorted(targets):
+        if state.placement_blocked(ALLIANCE, cid):
+            continue  # 城砦のある広場には支持トークンを配置できない(6.2.2)
         suit = state.map.clearing(cid).suit
         if _supporter_payment(state, suit, _spread_cost(state, cid)) is None:
             continue
@@ -452,11 +456,14 @@ def _remove_all_enemies(state: GameState, cid: int) -> GameState:
     """広場の敵配置物をすべて除去する(8.4.1.III)。source=連合でVPが入る。"""
     from .. import battle as battle_mod
     cs = state.clearing(cid)
+    removed_marquise = 0
     for f, n in list(cs.soldiers):
         if f == ALLIANCE:
             continue
         for _ in range(n):
             state = battle_mod.remove_piece(state, cid, f, ("soldier",), ALLIANCE)
+            if f == FactionId.MARQUISE:
+                removed_marquise += 1
     for p in list(state.clearing(cid).buildings):
         if p.faction == ALLIANCE:
             continue
@@ -469,6 +476,13 @@ def _remove_all_enemies(state: GameState, cid: int) -> GameState:
     # 放浪部族不参加なら no-op(既存3派閥の挙動は不変)。
     from . import vagabond as vagabond_mod
     state = vagabond_mod.on_area_removal(state, cid)
+    # 野戦病院(6.2.3): 反乱で猫兵士が除去されたイベントとして1回だけ判定する。
+    # 除去兵士はサプライへ戻っており、病院発動で城砦広場へ取り出す。
+    if removed_marquise > 0 and FactionId.MARQUISE in state.factions:
+        from . import marquise as marquise_mod
+        pushed = marquise_mod.maybe_field_hospital(state, cid, removed_marquise)
+        if pushed is not None:
+            state = pushed
     return state
 
 
