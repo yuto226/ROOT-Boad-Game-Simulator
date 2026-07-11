@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Root 観戦ビューア</title>
+<!--
+  自己完結の単一 HTML(DESIGN.md 17.3)。外部 CDN・fetch には依存しない。
+  tools/record_game.py が出力する game.json を <input type="file"> で
+  読み込み、対局を1手ずつ(またはステップスライダー/自動再生で)再生する。
+  file:// で直接開けること。テーマはライト固定(配布物のため, 17.3)。
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: #f3ede1; color: #2a2117;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  }
+  header {
+    padding: 10px 16px; background: #2a2117; color: #f3ede1;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.05rem; margin: 0; white-space: nowrap; }
+  #drop-zone {
+    border: 2px dashed #8a7a5c; border-radius: 6px; padding: 6px 12px;
+    font-size: 0.85rem; color: #f3ede1; transition: background 0.15s;
+  }
+  #drop-zone.drag-over { background: #4a3f2a; }
+  #meta-line { font-size: 0.82rem; color: #d8cdb2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  #empty-state {
+    margin: 60px auto; max-width: 480px; text-align: center; color: #6b5f47;
+    font-size: 0.95rem; line-height: 1.6;
+  }
+  #empty-state code {
+    background: #e7dcc4; padding: 1px 6px; border-radius: 4px; font-size: 0.85em;
+  }
+
+  #viewer { display: none; }
+  main {
+    display: flex; align-items: flex-start; gap: 12px; padding: 12px;
+  }
+  #board-wrap {
+    flex: 1 1 auto; min-width: 0; background: #fffaf0; border: 1px solid #d8cdb2;
+    border-radius: 8px; padding: 8px;
+  }
+  #board-svg { width: 100%; height: auto; display: block; }
+
+  aside {
+    flex: 0 0 320px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .panel {
+    background: #fffaf0; border: 1px solid #d8cdb2; border-radius: 8px;
+    padding: 10px 12px; font-size: 0.85rem;
+  }
+  .panel h2 {
+    font-size: 0.8rem; margin: 0 0 6px; color: #6b5f47;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  table.vp-table { width: 100%; border-collapse: collapse; }
+  table.vp-table td { padding: 2px 4px; }
+  table.vp-table td:last-child { text-align: right; font-weight: 600; }
+  .swatch {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 6px; vertical-align: middle;
+  }
+  #turn-info, #to-act, #pending-info, #action-info, #draw-discard {
+    margin: 2px 0;
+  }
+  #action-info { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem;
+    word-break: break-all; background: #efe6d0; padding: 4px 6px; border-radius: 4px; }
+  .hand-row { margin: 3px 0; cursor: default; }
+  .extras-block { margin-bottom: 8px; line-height: 1.5; }
+  .extras-block:last-child { margin-bottom: 0; }
+
+  footer {
+    position: sticky; bottom: 0; background: #2a2117; color: #f3ede1;
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  footer button {
+    background: #4a3f2a; color: #f3ede1; border: 1px solid #6b5f47;
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.9rem;
+  }
+  footer button:hover { background: #5a4d33; }
+  #step-slider { flex: 1 1 auto; min-width: 120px; }
+  #step-label { font-size: 0.8rem; min-width: 70px; text-align: right; }
+  #speed-select { background: #4a3f2a; color: #f3ede1; border: 1px solid #6b5f47; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Root 観戦ビューア</h1>
+  <input type="file" id="file-input" accept="application/json,.json">
+  <div id="drop-zone">ここに game.json をドラッグ&amp;ドロップ</div>
+  <span id="meta-line"></span>
+</header>
+
+<div id="empty-state">
+  <p><code>tools/record_game.py</code> で記録した <code>game.json</code> を
+  上のファイル選択(またはドラッグ&amp;ドロップ)で読み込んでください。</p>
+</div>
+
+<div id="viewer">
+<main>
+  <div id="board-wrap">
+    <svg id="board-svg" viewBox="0 0 820 650" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <aside>
+    <div class="panel">
+      <h2>VP</h2>
+      <table class="vp-table"><tbody id="vp-body"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>状況</h2>
+      <div id="turn-info"></div>
+      <div id="to-act"></div>
+      <div id="pending-info"></div>
+    </div>
+    <div class="panel">
+      <h2>直前アクション</h2>
+      <div id="action-info"></div>
+    </div>
+    <div class="panel">
+      <h2>手札(ホバーで一覧)</h2>
+      <div id="hands-wrap"></div>
+      <div id="draw-discard"></div>
+    </div>
+    <div class="panel">
+      <h2>派閥固有状態</h2>
+      <div id="extras-wrap"></div>
+    </div>
+  </aside>
+</main>
+</div>
+
+<footer>
+  <button id="prev-btn" title="前へ(←)">◀</button>
+  <button id="play-btn" title="自動再生">▶</button>
+  <button id="next-btn" title="次へ(→)">▶</button>
+  <input type="range" id="step-slider" min="0" max="0" value="0" step="1" disabled>
+  <span id="step-label">0 / 0</span>
+  <select id="speed-select">
+    <option value="0.5">0.5x</option>
+    <option value="1" selected>1x</option>
+    <option value="2">2x</option>
+    <option value="4">4x</option>
+  </select>
+</footer>
+
+<script>
+"use strict";
+
+// ============================================================
+// 定数(DESIGN.md 17.3)
+// ============================================================
+var SVGNS = "http://www.w3.org/2000/svg";
+
+// suit で広場の枠色(fox=赤茶, rabbit=黄, mouse=橙灰)
+var SUIT_COLORS = { fox: "#a0522d", rabbit: "#d9a521", mouse: "#9c8f7c", bird: "#4a4a4a" };
+
+// 派閥色(17.3 指定)
+var FACTION_COLORS = {
+  marquise: "#d2691e", eyrie: "#1e5aa8", alliance: "#2e7d32",
+  vagabond: "#616161", dummy: "#999999"
+};
+var FACTION_LABELS = {
+  marquise: "猫", eyrie: "鷲巣", alliance: "連合", vagabond: "放浪", dummy: "ダミー"
+};
+
+// 建物・トークンの1〜2文字ラベル(17.3)
+var KIND_LABELS = {
+  sawmill: "製", workshop: "工", recruiter: "募", roost: "巣",
+  base: "拠", keep: "城", wood: "木", sympathy: "支"
+};
+
+// 秋の地図(12広場)の固定座標(手動配置, 17.3)。map.clearings の隣接から辺を描く。
+var COORDS = {
+  0: [120, 90], 1: [350, 70], 2: [630, 100],
+  3: [150, 300], 4: [350, 230], 5: [540, 380], 6: [720, 260], 7: [350, 400],
+  8: [140, 560], 9: [350, 560], 10: [540, 560], 11: [720, 480]
+};
+var CLEARING_W = 140;
+var CLEARING_H = 100;
+
+// ============================================================
+// 状態
+// ============================================================
+var game = null;       // 読み込んだ JSON 全体
+var stepIndex = 0;
+var playTimer = null;
+var speed = 1;
+
+// ============================================================
+// 読み込み
+// ============================================================
+function readFile(file) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var data;
+    try {
+      data = JSON.parse(reader.result);
+    } catch (err) {
+      alert("JSON の読み込みに失敗しました: " + err.message);
+      return;
+    }
+    loadGame(data);
+  };
+  reader.onerror = function () {
+    alert("ファイルの読み込みに失敗しました");
+  };
+  reader.readAsText(file);
+}
+
+function loadGame(data) {
+  if (!data || !data.meta || !data.map || !data.steps) {
+    alert("game.json の形式が不正です(meta/map/steps が必要)");
+    return;
+  }
+  game = data;
+  stepIndex = 0;
+  pause();
+
+  var meta = game.meta;
+  var factionsStr = meta.factions.map(function (f) {
+    return (FACTION_LABELS[f] || f) + "(" + (meta.policies ? meta.policies[meta.factions.indexOf(f)] : "?") + ")";
+  }).join(" vs ");
+  var winnerStr = meta.winner ? (FACTION_LABELS[meta.winner] || meta.winner) : "引き分け(timeout)";
+  document.getElementById("meta-line").textContent =
+    factionsStr + " | seed=" + meta.seed + " | turns=" + meta.turns + " | 勝者=" + winnerStr;
+
+  buildBoardBase(game.map);
+
+  var slider = document.getElementById("step-slider");
+  slider.max = game.steps.length - 1;
+  slider.value = 0;
+  slider.disabled = game.steps.length <= 1;
+
+  document.getElementById("empty-state").style.display = "none";
+  document.getElementById("viewer").style.display = "";
+
+  renderStep(0);
+}
+
+// ============================================================
+// 盤面(静的レイヤ: 辺+広場の枠。動的レイヤ: 駒/建物, 17.3)
+// ============================================================
+function buildBoardBase(mapData) {
+  var svg = document.getElementById("board-svg");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  var byId = {};
+  mapData.clearings.forEach(function (c) { byId[c.id] = c; });
+
+  // 辺(adjacent)を先に描く(広場の下敷きにする)
+  var drawn = {};
+  mapData.clearings.forEach(function (c) {
+    c.adjacent.forEach(function (adj) {
+      var key = Math.min(c.id, adj) + "-" + Math.max(c.id, adj);
+      if (drawn[key]) return;
+      drawn[key] = true;
+      var p1 = COORDS[c.id], p2 = COORDS[adj];
+      if (!p1 || !p2) return;
+      var line = document.createElementNS(SVGNS, "line");
+      line.setAttribute("x1", p1[0]); line.setAttribute("y1", p1[1]);
+      line.setAttribute("x2", p2[0]); line.setAttribute("y2", p2[1]);
+      line.setAttribute("stroke", "#b8a97e");
+      line.setAttribute("stroke-width", "3");
+      svg.appendChild(line);
+    });
+  });
+
+  // 広場の枠(suit色)+ 動的レイヤの入れ物
+  mapData.clearings.forEach(function (c) {
+    var pos = COORDS[c.id];
+    if (!pos) return;
+    var g = document.createElementNS(SVGNS, "g");
+    g.setAttribute("transform", "translate(" + pos[0] + "," + pos[1] + ")");
+
+    var rect = document.createElementNS(SVGNS, "rect");
+    rect.setAttribute("x", -CLEARING_W / 2);
+    rect.setAttribute("y", -CLEARING_H / 2);
+    rect.setAttribute("width", CLEARING_W);
+    rect.setAttribute("height", CLEARING_H);
+    rect.setAttribute("rx", 12);
+    rect.setAttribute("fill", "#fffaf0");
+    rect.setAttribute("stroke", SUIT_COLORS[c.suit] || "#888");
+    rect.setAttribute("stroke-width", "5");
+    g.appendChild(rect);
+
+    var label = document.createElementNS(SVGNS, "text");
+    label.setAttribute("x", -CLEARING_W / 2 + 8);
+    label.setAttribute("y", -CLEARING_H / 2 + 15);
+    label.setAttribute("font-size", "11");
+    label.setAttribute("fill", "#6b5f47");
+    label.textContent = "#" + c.id + (c.ruin ? " 遺" : "") + (c.corner ? " " + c.corner : "");
+    g.appendChild(label);
+
+    var dyn = document.createElementNS(SVGNS, "g");
+    dyn.setAttribute("class", "dyn-layer");
+    dyn.setAttribute("data-cid", String(c.id));
+    g.appendChild(dyn);
+
+    svg.appendChild(g);
+  });
+}
+
+function renderBoard(state) {
+  var byCid = {};
+  state.clearings.forEach(function (cs) { byCid[cs.cid] = cs; });
+
+  var layers = document.querySelectorAll("#board-svg .dyn-layer");
+  for (var i = 0; i < layers.length; i++) {
+    var dyn = layers[i];
+    var cid = Number(dyn.getAttribute("data-cid"));
+    while (dyn.firstChild) dyn.removeChild(dyn.firstChild);
+    var cs = byCid[cid];
+    if (!cs) continue;
+
+    // 兵士バッジ(派閥色の丸+数)
+    var factions = Object.keys(cs.soldiers);
+    var startX = -((factions.length - 1) * 26) / 2;
+    factions.forEach(function (fid, idx) {
+      var cx = startX + idx * 26;
+      var circle = document.createElementNS(SVGNS, "circle");
+      circle.setAttribute("cx", cx);
+      circle.setAttribute("cy", -16);
+      circle.setAttribute("r", 12);
+      circle.setAttribute("fill", FACTION_COLORS[fid] || "#333");
+      dyn.appendChild(circle);
+
+      var t = document.createElementNS(SVGNS, "text");
+      t.setAttribute("x", cx);
+      t.setAttribute("y", -12);
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("font-size", "11");
+      t.setAttribute("font-weight", "bold");
+      t.setAttribute("fill", "#fff");
+      t.textContent = String(cs.soldiers[fid]);
+      dyn.appendChild(t);
+    });
+
+    // 建物/トークンバッジ(1〜2文字ラベル)
+    var items = cs.buildings.concat(cs.tokens);
+    var perRow = 5;
+    items.forEach(function (it, idx) {
+      var row = Math.floor(idx / perRow);
+      var col = idx % perRow;
+      var rowStart = row * perRow;
+      var rowCount = Math.min(perRow, items.length - rowStart);
+      var bx = -((rowCount - 1) * 22) / 2 + col * 22;
+      var by = 16 + row * 22;
+
+      var rect = document.createElementNS(SVGNS, "rect");
+      rect.setAttribute("x", bx - 9);
+      rect.setAttribute("y", by - 10);
+      rect.setAttribute("width", 18);
+      rect.setAttribute("height", 18);
+      rect.setAttribute("rx", 3);
+      rect.setAttribute("fill", FACTION_COLORS[it.faction] || "#555");
+      dyn.appendChild(rect);
+
+      var t2 = document.createElementNS(SVGNS, "text");
+      t2.setAttribute("x", bx);
+      t2.setAttribute("y", by + 4);
+      t2.setAttribute("text-anchor", "middle");
+      t2.setAttribute("font-size", "10");
+      t2.setAttribute("fill", "#fff");
+      t2.textContent = KIND_LABELS[it.kind] || it.kind.slice(0, 1);
+      dyn.appendChild(t2);
+    });
+  }
+}
+
+// ============================================================
+// サイドパネル(17.3)
+// ============================================================
+function formatExtraValue(v) {
+  if (v === null || v === undefined) return "なし";
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "なし";
+    return v.map(function (x) {
+      return (x !== null && typeof x === "object") ? JSON.stringify(x) : String(x);
+    }).join(", ");
+  }
+  if (typeof v === "object") {
+    var parts = [];
+    for (var k in v) { if (Object.prototype.hasOwnProperty.call(v, k)) parts.push(k + "=" + v[k]); }
+    return parts.length ? parts.join(", ") : "なし";
+  }
+  if (typeof v === "boolean") return v ? "あり" : "なし";
+  return String(v);
+}
+
+function renderSidePanel(step, state) {
+  var factionsOrder = game.meta.factions;
+
+  // VP表
+  var vpBody = document.getElementById("vp-body");
+  vpBody.innerHTML = "";
+  factionsOrder.forEach(function (fid) {
+    var tr = document.createElement("tr");
+    var tdName = document.createElement("td");
+    var swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = FACTION_COLORS[fid] || "#888";
+    tdName.appendChild(swatch);
+    tdName.appendChild(document.createTextNode(FACTION_LABELS[fid] || fid));
+    var tdVp = document.createElement("td");
+    tdVp.textContent = (state.vps && state.vps[fid] != null) ? state.vps[fid] : 0;
+    tr.appendChild(tdName);
+    tr.appendChild(tdVp);
+    vpBody.appendChild(tr);
+  });
+
+  // 手番・pending
+  document.getElementById("turn-info").textContent =
+    "ターン " + state.turn_count + " / " + game.meta.max_turns +
+    (state.finished ? "(終了)" : "");
+  document.getElementById("to-act").textContent =
+    "手番: " + (FACTION_LABELS[state.to_act] || state.to_act);
+  document.getElementById("pending-info").textContent =
+    (state.pending && state.pending.length) ? "保留: " + state.pending.join(" > ") : "保留なし";
+
+  // 直前アクション
+  var actionText;
+  if (step.action === null || step.action === undefined) {
+    actionText = "(初期状態)";
+  } else {
+    var actorLabel = step.actor ? (FACTION_LABELS[step.actor] || step.actor) + ": " : "";
+    actionText = actorLabel + step.action;
+  }
+  document.getElementById("action-info").textContent = actionText;
+
+  // 手札
+  var handsWrap = document.getElementById("hands-wrap");
+  handsWrap.innerHTML = "";
+  factionsOrder.forEach(function (fid) {
+    var cards = (state.hands && state.hands[fid]) || [];
+    var div = document.createElement("div");
+    div.className = "hand-row";
+    var swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = FACTION_COLORS[fid] || "#888";
+    div.appendChild(swatch);
+    div.appendChild(document.createTextNode(
+      (FACTION_LABELS[fid] || fid) + ": " + cards.length + "枚"));
+    div.title = cards.length ? cards.join(", ") : "(なし)";
+    handsWrap.appendChild(div);
+  });
+  document.getElementById("draw-discard").textContent =
+    "山札 " + state.draw_size + "枚 / 捨て札上: " + (state.discard_top || "(なし)");
+
+  // faction_extras 要約
+  var extrasWrap = document.getElementById("extras-wrap");
+  extrasWrap.innerHTML = "";
+  factionsOrder.forEach(function (fid) {
+    var extras = (state.faction_extras && state.faction_extras[fid]) || {};
+    var div = document.createElement("div");
+    div.className = "extras-block";
+    var title = document.createElement("strong");
+    title.textContent = FACTION_LABELS[fid] || fid;
+    div.appendChild(title);
+    div.appendChild(document.createElement("br"));
+    var keys = Object.keys(extras);
+    if (!keys.length) {
+      div.appendChild(document.createTextNode("(なし)"));
+    } else {
+      keys.forEach(function (k, idx) {
+        if (idx > 0) div.appendChild(document.createElement("br"));
+        div.appendChild(document.createTextNode(k + ": " + formatExtraValue(extras[k])));
+      });
+    }
+    extrasWrap.appendChild(div);
+  });
+}
+
+// ============================================================
+// ステップ制御
+// ============================================================
+function renderStep(i) {
+  if (!game) return;
+  stepIndex = Math.max(0, Math.min(i, game.steps.length - 1));
+  var step = game.steps[stepIndex];
+  renderBoard(step.state);
+  renderSidePanel(step, step.state);
+  document.getElementById("step-slider").value = String(stepIndex);
+  document.getElementById("step-label").textContent =
+    stepIndex + " / " + (game.steps.length - 1);
+}
+
+function play() {
+  if (!game || playTimer) return;
+  if (stepIndex >= game.steps.length - 1) stepIndex = -1;
+  playTimer = setInterval(function () {
+    if (stepIndex >= game.steps.length - 1) { pause(); return; }
+    renderStep(stepIndex + 1);
+  }, 600 / speed);
+  document.getElementById("play-btn").textContent = "⏸";
+}
+
+function pause() {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  document.getElementById("play-btn").textContent = "▶";
+}
+
+// ============================================================
+// イベント配線
+// ============================================================
+document.getElementById("file-input").addEventListener("change", function (e) {
+  var file = e.target.files && e.target.files[0];
+  if (file) readFile(file);
+});
+
+var dropZone = document.getElementById("drop-zone");
+dropZone.addEventListener("dragover", function (e) {
+  e.preventDefault();
+  dropZone.classList.add("drag-over");
+});
+dropZone.addEventListener("dragleave", function () {
+  dropZone.classList.remove("drag-over");
+});
+dropZone.addEventListener("drop", function (e) {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) readFile(file);
+});
+
+document.getElementById("prev-btn").addEventListener("click", function () {
+  pause(); renderStep(stepIndex - 1);
+});
+document.getElementById("next-btn").addEventListener("click", function () {
+  pause(); renderStep(stepIndex + 1);
+});
+document.getElementById("play-btn").addEventListener("click", function () {
+  if (playTimer) pause(); else play();
+});
+document.getElementById("step-slider").addEventListener("input", function (e) {
+  pause();
+  renderStep(Number(e.target.value));
+});
+document.getElementById("speed-select").addEventListener("change", function (e) {
+  speed = Number(e.target.value);
+  if (playTimer) { pause(); play(); }
+});
+
+document.addEventListener("keydown", function (e) {
+  if (!game) return;
+  if (e.key === "ArrowLeft") { pause(); renderStep(stepIndex - 1); }
+  else if (e.key === "ArrowRight") { pause(); renderStep(stepIndex + 1); }
+});
+</script>
+
+</body>
+</html>

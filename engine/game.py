@@ -233,16 +233,25 @@ class GameResult:
 
 def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
              seed: int, max_turns: int = 300,
-             validate_each_step: bool = False) -> GameResult:
+             validate_each_step: bool = False,
+             observer: Optional[object] = None) -> GameResult:
     """1試合を回す(3.8)。policies は faction -> Policy。
 
     30VP 到達で即勝利(3.1)。max_turns 超過で timeout 引き分け。
 
     ``validate_each_step=True`` のとき、各 apply 後に ``state.validate()`` を
     呼んで状態不変量(9.4)を検証する。既定 False(性能への影響を避ける)。
+
+    ``observer`` (DESIGN.md 17.2): ``Callable[[Optional[Action], GameState], None]``。
+    既定 None は従来の挙動と完全同一(additive)。非 None のとき、
+    ``new_game`` 直後に ``observer(None, state)`` を1回、以後 ``apply`` の
+    たびに ``observer(action, state)`` を呼ぶ(対局レコーダ tools/record_game.py
+    が利用する)。乱数消費・決定性・行動カタログには一切影響しない。
     """
     rng = random.Random(seed)
     state = new_game(factions, rng)
+    if observer is not None:
+        observer(None, state)
 
     setup_done = False
     while True:
@@ -261,6 +270,8 @@ def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
             policy = policies[state.to_act()]
             action = policy.choose(state, acts, rng)
         state = apply(state, action, rng)
+        if observer is not None:
+            observer(action, state)
         if validate_each_step:
             state.validate()
 

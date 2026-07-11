@@ -79,6 +79,12 @@ docker compose -f docker/compose.yaml run -d train \
   使えない。Ubuntu内 `~/.docker/config.json` から credsStore を外して解決済み
   (バックアップ=config.json.bak)。公開イメージのpullに認証は不要。
   Docker Hubへのloginが必要になったらWindows側の対話セッションで行うこと。
+  **PC再起動やDocker Desktop再起動で config.json が再生成され再発する**
+  (2026-07-11に再発確認)。再適用ワンライナー(Ubuntu内):
+  `python3 -c 'import json,os; p=os.path.expanduser("~/.docker/config.json"); d=json.load(open(p)); d.pop("credsStore",None); json.dump(d,open(p,"w"),indent=2)'`
+- **WSL統合が壊れたら、まずWindows側で `docker version` を叩いてエンジンを起こす**
+  (Resource Saver でdocker-desktopディストリがStoppedになる)。それでUbuntu内に
+  dockerが注入されなければDocker Desktop再起動(確実なのはWindows再起動)。
 - **管理者ユーザーのSSH鍵**: `~/.ssh/authorized_keys` ではなく
   `C:\ProgramData\ssh\administrators_authorized_keys` に置く(ACL修正必須、
   icaclsで Administrators/SYSTEM のみに)。

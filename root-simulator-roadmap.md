@@ -81,8 +81,11 @@
 
 ## フェーズ7(将来・任意): UI接続
 
-- [ ] FastAPI等でエンジンをAPI化
-- [ ] Action履歴を1手ずつ流し込む観戦モードUI
+- [x] 観戦モード — ✅ 完了(2026-07-11、DESIGN.md 17章)。サーバ不要の2点構成:
+  `tools/record_game.py`(対局→JSON。policy指定 random/heuristic/nn:<ckpt>[:sample])+
+  `ui/viewer.html`(自己完結単一HTML。file://で開き game.json を読み込む)。
+  使い方例: `python3 -m tools.record_game --factions marquise,eyrie --policies nn:rl_runs/gpu-10m/ckpt_400.pt,heuristic --seed 0 -o ui/game.json` → `open ui/viewer.html`
+- [ ] FastAPI等でエンジンをAPI化(観戦はAPI不要で実現済み。人間vs CPUをやる段で導入判断)
 - [ ] (任意)人間 vs CPU対戦モード
 
 ---

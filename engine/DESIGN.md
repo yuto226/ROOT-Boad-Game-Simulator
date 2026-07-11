@@ -1142,3 +1142,70 @@ selftest 新シナリオ結果 / pytest 全件(xfail 0 になること) / smoke 
    league_episodes>0 を log.csv で確認 (c) ckpt 保存 → resume でプール再構築が動く
 4. スループット低下の実測(league_prob=0.5 で steps/s がどの程度落ちるか)
 5. レビュー注目点(ファイル:行)
+
+---
+
+## 17. フェーズ7(前半): 観戦モード=対局レコーダ+リプレイビューア(Fable 2026-07-11。実装者はこの設計に従うこと)
+
+**方針**: FastAPI/サーバは導入しない(人間vs CPU対戦をやる段=7後半で判断)。
+①1対局をJSONに記録するCLI+②自己完結の単一HTMLビューア、の2点構成
+(`simulation/dashboard.html` と同じ配布パターン)。学習(フェーズ6)とは完全独立。
+
+### 17.1 スコープ
+
+- 新規: `tools/record_game.py` + `ui/viewer.html` + `tests/test_record.py`。
+- engine 変更は1点のみ: `run_game` に **`observer` kwarg(既定None)** を追加(17.2)。
+  挙動・決定性・行動カタログに影響しない(additive)。
+- torch は `nn:<ckpt>` ポリシー指定時のみ遅延import(`rl.nn_policy.NNPolicy` 再利用)。
+
+### 17.2 レコーダ(tools/record_game.py)
+
+- `run_game(..., observer=None)`: `new_game` 直後に `observer(None, state)`、
+  以後 `apply` のたびに `observer(action, state)` を呼ぶ(None時は従来と完全同一)。
+- CLI: `python3 -m tools.record_game --factions marquise,eyrie
+  --policies heuristic,random --seed 0 -o game.json`
+  - policy 指定: `random` / `heuristic` / `nn:<ckptパス>[:sample]`(既定greedy)。
+    factions と同順のカンマ区切り。
+- JSON スキーマ:
+  - `meta`: factions, policies, seed, max_turns, winner, winners, vps, turns,
+    timeout, recorded_at(ISO)
+  - `map`: `engine/data/map_autumn.json` の clearings をそのまま転記
+    (id, suit, slots, ruin, corner, adjacent)
+  - `steps`: `[{i, actor, action, state}, ...]`。i=0 は action=null の初期状態。
+    action は `repr(action)` 文字列(日本語ラベル化は将来)。actor=そのactionを
+    打った派閥(i=0はnull)。
+  - `state` スナップショット(完全情報=全公開。12.3の方針と整合):
+    turn_count, to_act, finished, pending(decision型名のリスト), vps,
+    clearings(cid, soldiers {faction:n}, buildings/tokens [{faction,kind}], ruin),
+    hands {faction: [card名]}, draw_size, discard_top(card名 or null),
+    faction_extras {faction: 派閥固有の主要フィールド dict}
+    (猫: 木材サプライ数・城砦有無 / 鷲巣: デクリー内容・リーダー / 連合: 支持者
+    枚数・士官数 / 放浪: アイテム状態・関係。state.py の該当フィールドから素直に)
+- 実装は「스냅ショット関数 `snapshot(state) -> dict`」を tools 側に置く
+  (engine には入れない)。カード名は cards.json の定義から引く。
+
+### 17.3 ビューア(ui/viewer.html)
+
+- **自己完結単一HTML**(外部CDN・fetch不要)。`<input type="file">` で game.json を
+  読み込む(file:// で開けること)。ドラッグ&ドロップ対応は任意。
+- 盤面: 12広場を固定座標で SVG 描画(map.corner / adjacent を参考に手動配置で
+  よい。秋の地図の掲載配置に近い見た目を目指す)。suit で枠色(fox=赤茶,
+  rabbit=黄, mouse=橙灰)、辺=adjacent 線。
+- 広場内表示: 派閥色の丸+兵士数、建物・トークンは1〜2文字ラベル
+  (例: 製=製材所, 募=募兵所, 工=工房, 巣=止まり木, 支=支持, 城=城砦, 木=木材)。
+  派閥色: 猫=#d2691e, 鷲巣=#1e5aa8, 連合=#2e7d32, 放浪=#616161。
+- サイドパネル: VP表、手番と pending、手札(枚数+ホバーで一覧)、直前 action の
+  repr 文字列、faction_extras の要約。
+- 操作: ステップスライダー+「◀ ▶」ボタン+←→キー+自動再生(0.5〜4倍速)。
+- テーマはライト固定でよい(配布物のため)。
+
+### 17.4 検証と完了条件(subagent の報告に含めること)
+
+1. `python3 -m pytest tests/ -q` 全パス(observer 既定Noneの無影響を含む)。
+   `tests/test_record.py`: (a) observer が steps+1 回呼ばれる(小さな乱数局で)
+   (b) 生成JSONの必須キー存在+steps[0].action==null (c) 同 seed 2回記録の一致
+2. random vs heuristic 1局を記録し、JSONサイズ・ステップ数・所要秒を報告
+3. viewer.html: サンプルJSONを読み込む主要ロジックの構文検証(node があれば
+   `node --check` 相当、なければ python でスクリプトタグ抽出+簡易検査)。
+   見た目の最終確認は Fable/ユーザーが行う
+4. レビュー注目点(ファイル:行)
