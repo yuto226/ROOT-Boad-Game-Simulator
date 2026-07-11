@@ -44,7 +44,8 @@
     flex: 1 1 auto; min-width: 0; background: #fffaf0; border: 1px solid #d8cdb2;
     border-radius: 8px; padding: 8px;
   }
-  #board-svg { width: 100%; height: auto; display: block; }
+  /* Safari は viewBox からの height:auto 算出が不安定なため比率を明示 */
+  #board-svg { width: 100%; height: auto; aspect-ratio: 820 / 650; display: block; }
 
   aside {
     flex: 0 0 320px; display: flex; flex-direction: column; gap: 10px;
@@ -238,7 +239,8 @@ function loadGame(data) {
   slider.disabled = game.steps.length <= 1;
 
   document.getElementById("empty-state").style.display = "none";
-  document.getElementById("viewer").style.display = "";
+  // CSS の #viewer{display:none} を確実に上書きする("" だと none に戻る)
+  document.getElementById("viewer").style.display = "block";
 
   renderStep(0);
 }
