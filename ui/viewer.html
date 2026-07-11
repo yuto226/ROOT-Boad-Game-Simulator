@@ -513,15 +513,18 @@ document.getElementById("file-input").addEventListener("change", function (e) {
   if (file) readFile(file);
 });
 
+// ページ全体をドロップ対象にする。ゾーン外ドロップ時のブラウザ既定動作
+// (ドロップしたファイルへのナビゲーション)は file:// 間遷移のセキュリティ
+// エラーになるため、window レベルで必ず preventDefault する(17.3)。
 var dropZone = document.getElementById("drop-zone");
-dropZone.addEventListener("dragover", function (e) {
+window.addEventListener("dragover", function (e) {
   e.preventDefault();
   dropZone.classList.add("drag-over");
 });
-dropZone.addEventListener("dragleave", function () {
-  dropZone.classList.remove("drag-over");
+window.addEventListener("dragleave", function (e) {
+  if (!e.relatedTarget) dropZone.classList.remove("drag-over");
 });
-dropZone.addEventListener("drop", function (e) {
+window.addEventListener("drop", function (e) {
   e.preventDefault();
   dropZone.classList.remove("drag-over");
   var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
