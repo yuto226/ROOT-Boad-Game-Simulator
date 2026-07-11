@@ -41,6 +41,30 @@ class DeclareBattle(Action):
     defender: FactionId
 
 
+# --- 圧倒カード / 共闘軍(共通, 3.3 / 9.2.8) ---
+@dataclass(frozen=True)
+class ActivateDominance(Action):
+    """圧倒カードの発動(3.3.1)。手札→公開。以後VP凍結。放浪部族は不可(9.2.8)。"""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class TakeDominance(Action):
+    """盤脇の圧倒カードの回収(3.3.4)。一致動物種のカード1枚を消費する。"""
+
+    spend_card_id: str
+    dominance_id: str
+
+
+@dataclass(frozen=True)
+class VagabondCoalition(Action):
+    """共闘軍の結成(9.2.8, 4人以上戦)。圧倒カードを公開し最低VPの派閥と共闘。"""
+
+    card_id: str
+    partner: FactionId
+
+
 # --- 猫野侯国固有(第6章) ---
 @dataclass(frozen=True)
 class MarquiseBuild(Action):

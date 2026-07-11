@@ -9,7 +9,7 @@ faction_score = 共通項 + 派閥固有項。DUMMY は 0 固定。
 from __future__ import annotations
 
 from engine.state import GameState
-from engine.types import FactionId
+from engine.types import Corner, FactionId, OPPOSITE_CORNER, Suit
 
 from bots.heuristic import alliance as _alliance
 from bots.heuristic import eyrie as _eyrie
@@ -40,7 +40,34 @@ def _common_score(state: GameState, f: FactionId) -> float:
     score += clearings_with * 2 + total_soldiers * 1
     # 手札枚数*2(ただし 5 枚まで。抱えすぎに報酬を与えない)
     score += min(len(fs.hand), 5) * 2
+    # 圧倒進捗項(DESIGN.md 14.6): 発動中は VP が凍結し共通項の VP が動かないため、
+    # 勝利条件の充足度を代理指標にする。無意味な発動を抑止しつつ達成間際は発動を促す。
+    if fs.dominance_card is not None:
+        score += _dominance_progress(state, f, fs.dominance_card)
     return score
+
+
+def _dominance_progress(state: GameState, f: FactionId, dom_id: str) -> float:
+    """圧倒発動中の進捗スコア(DESIGN.md 14.6): -20 + 50 × (充足広場数/必要数)。"""
+    suit = state.cards.suit_of(dom_id)
+    if suit == Suit.BIRD:
+        required = 2
+        best = 0
+        for corner in (Corner.NW, Corner.NE):
+            a = state.map.corner_clearing(corner)
+            b = state.map.corner_clearing(OPPOSITE_CORNER[corner])
+            got = sum(1 for cid in (a, b)
+                      if cid is not None and state.controller(cid) == f)
+            best = max(best, got)
+        satisfied = best
+    else:
+        required = 3
+        satisfied = sum(
+            1 for cs in state.clearings
+            if state.map.clearing(cs.cid).suit == suit
+            and state.controller(cs.cid) == f)
+    satisfied = min(satisfied, required)
+    return -20 + 50 * (satisfied / required)
 
 
 def faction_score(state: GameState, f: FactionId) -> float:

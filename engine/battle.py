@@ -66,8 +66,9 @@ def _vagabond_can_take_hits(state: GameState) -> bool:
 
 # ---------------- 除去(3.5) ----------------
 def _award_vp(state: GameState, faction: FactionId, vp: int) -> GameState:
-    fs = state.fs(faction)
-    return state.with_faction_state(dataclasses.replace(fs, vp=fs.vp + vp))
+    # VP凍結(圧倒/共闘, 14.2)と非負クランプを中央ヘルパへ集約する。
+    from .mechanics import award_vp
+    return award_vp(state, faction, vp)
 
 
 def _return_building_to_board(state: GameState, victim: FactionId, kind: str) -> GameState:

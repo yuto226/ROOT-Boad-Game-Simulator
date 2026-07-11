@@ -26,7 +26,7 @@ from .state import (
     MarquiseState,
     VagabondState,
 )
-from .types import FactionId, ItemKind, Phase
+from .types import Corner, FactionId, ItemKind, OPPOSITE_CORNER, Phase, Suit
 
 #: 共通サプライのアイテム(5.1.5)
 SUPPLY_ITEMS: Tuple[Tuple[ItemKind, int], ...] = (
@@ -171,9 +171,50 @@ def _setup_alliance_supporters(state: GameState, rng: random.Random,
     return state
 
 
+def check_dominance_victory(state: GameState) -> GameState:
+    """圧倒勝利の判定(3.3.1.I/II)。手番派閥の鳥歌フェイズ開始時に呼ぶ(14.5)。
+
+    発動済み圧倒カードの動物種に応じて:
+    - 一般(fox/rabbit/mouse): その動物種の広場を3ヶ所以上支配していれば勝利。
+    - 鳥: 対角の隅広場2ヶ所(NW+SE または NE+SW)を支配していれば勝利。
+
+    放浪部族は圧倒発動不可(9.2.8)のため判定対象外。
+    成立なら ``winner`` を設定し ``finished=True`` にする。
+    """
+    if state.finished:
+        return state
+    f = state.current_faction()
+    if f == FactionId.VAGABOND:
+        return state
+    fs = state.fs(f)
+    if fs.dominance_card is None:
+        return state
+    suit = state.cards.suit_of(fs.dominance_card)
+    if suit == Suit.BIRD:
+        # 3.3.1.II: 対角の隅広場2ヶ所を支配
+        for corner in (Corner.NW, Corner.NE):
+            a = state.map.corner_clearing(corner)
+            b = state.map.corner_clearing(OPPOSITE_CORNER[corner])
+            if (a is not None and b is not None
+                    and state.controls(f, a) and state.controls(f, b)):
+                return state.replace(winner=f, finished=True)
+        return state
+    # 3.3.1.I: 一致動物種の広場を3ヶ所以上支配
+    controlled = sum(
+        1 for cs in state.clearings
+        if state.map.clearing(cs.cid).suit == suit and state.controls(f, cs.cid))
+    if controlled >= 3:
+        return state.replace(winner=f, finished=True)
+    return state
+
+
 def begin_first_turn(state: GameState, rng: random.Random) -> GameState:
     """セットアップ完了後、先手番の鳥歌フェイズ開始処理を実行(3.8)。"""
     assert not state.pending, "setup decisions remain"
+    # 3.3.1: 鳥歌開始時に圧倒勝利判定(begin_phase の前)
+    state = check_dominance_victory(state)
+    if state.finished:
+        return state
     from .factions import get_logic
     return get_logic(state.current_faction()).begin_phase(state, rng)
 
@@ -186,6 +227,8 @@ class GameResult:
     turns: int
     vps: Dict[FactionId, int]
     timeout: bool
+    #: 勝者の集合(3.1 / 9.2.8)。共闘軍の共同勝利を含む。単独勝利なら (winner,)。
+    winners: Tuple[FactionId, ...] = ()
 
 
 def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
@@ -226,4 +269,5 @@ def run_game(factions: Tuple[FactionId, ...], policies: Dict[FactionId, object],
         turns=state.turn_count,
         vps={f: state.fs(f).vp for f in state.factions},
         timeout=state.winner is None,
+        winners=state.winners,
     )

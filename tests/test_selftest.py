@@ -19,6 +19,13 @@ from engine.selftest import (
     test_ambush_via_pending as _ambush_via_pending,
     test_base_removed as _base_removed,
     test_battle_via_pending as _battle_via_pending,
+    test_coalition as _coalition,
+    test_dominance_activation as _dominance_activation,
+    test_dominance_bird_victory as _dominance_bird_victory,
+    test_dominance_card_conservation as _dominance_card_conservation,
+    test_dominance_cost_and_recover as _dominance_cost_and_recover,
+    test_dominance_evening_discard as _dominance_evening_discard,
+    test_dominance_general_victory as _dominance_general_victory,
     test_eyrie_turmoil as _eyrie_turmoil,
     test_eyrie_turmoil_new_generation as _eyrie_turmoil_new_generation,
     test_guerrilla_dice as _guerrilla_dice,
@@ -97,3 +104,32 @@ def test_vagabond_evening():
 
 def test_vagabond_quest():
     _vagabond_quest()
+
+
+# --- 圧倒カード(3.3)+共闘軍(9.2.8), DESIGN.md 14.8 ---
+def test_dominance_activation():
+    _dominance_activation()
+
+
+def test_dominance_general_victory():
+    _dominance_general_victory()
+
+
+def test_dominance_bird_victory():
+    _dominance_bird_victory()
+
+
+def test_dominance_cost_and_recover():
+    _dominance_cost_and_recover()
+
+
+def test_dominance_evening_discard():
+    _dominance_evening_discard()
+
+
+def test_coalition():
+    _coalition()
+
+
+def test_dominance_card_conservation():
+    _dominance_card_conservation()

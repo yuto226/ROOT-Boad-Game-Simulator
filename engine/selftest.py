@@ -15,6 +15,7 @@ import random
 import sys
 
 from .actions import (
+    ActivateDominance,
     AllianceDiscardSupporter,
     AllianceRevolt,
     AllocateHit,
@@ -22,6 +23,8 @@ from .actions import (
     AmbushChoice,
     AmbushDefenderDecision,
     DeclareBattle,
+    DiscardCard,
+    DiscardDecision,
     EndPhase,
     EyrieChooseCorner,
     EyrieChooseLeader,
@@ -33,18 +36,21 @@ from .actions import (
     OutragePay,
     SetupChooseKeep,
     SupportersLimitDecision,
+    TakeDominance,
     VagabondAid,
     VagabondBattle,
     VagabondChooseCharacter,
     VagabondChooseForest,
+    VagabondCoalition,
     VagabondExplore,
     VagabondQuest,
     VagabondStrike,
 )
 from .apply import apply
 from .battle import remove_piece
-from .game import new_game
+from .game import check_dominance_victory, new_game
 from .legal import legal_actions
+from .mechanics import award_vp, to_discard
 from .state import GameState, ItemTile
 from .types import (
     B_BASE,
@@ -779,6 +785,217 @@ def test_vagabond_quest() -> None:
     print("  quest: errand-fox solved for 2VP, open quests back to 3")
 
 
+# ============================================================
+#  圧倒カード(3.3)+共闘軍(9.2.8)。DESIGN.md 14.8 の7シナリオ。
+# ============================================================
+def _resolve_setup(state: GameState, rng: random.Random) -> GameState:
+    """セットアップ Decision を全解決する(城砦は NW 優先, 他は legal[0])。"""
+    while state.pending:
+        acts = legal_actions(state)
+        act = acts[0]
+        for a in acts:
+            if isinstance(a, SetupChooseKeep) and a.corner == "NW":
+                act = a
+        state = apply(state, act, rng)
+    return state
+
+
+def _set_fs(state: GameState, faction: FactionId, **kw) -> GameState:
+    return state.with_faction_state(dataclasses.replace(state.fs(faction), **kw))
+
+
+def _sole_control(state: GameState, faction: FactionId, cids) -> GameState:
+    """指定広場を全消去し faction の兵士1個ずつを置いて単独支配させる。"""
+    for cid in cids:
+        state = _clear(state, cid)
+        state = state.with_clearing(state.clearing(cid).add_soldiers(faction, 1))
+    return state
+
+
+def _pull_from_deck(state: GameState, card_id: str) -> GameState:
+    deck = list(state.deck)
+    deck.remove(card_id)
+    return state.replace(deck=tuple(deck))
+
+
+def test_dominance_activation() -> None:
+    """発動(3.3.1): VP9非合法・VP10合法、発動後は手札から消え VP 凍結(14.8-1)。"""
+    rng = random.Random(101)
+    state = _resolve_setup(new_game((M, E, A), rng), rng)
+    idx = state.factions.index(M)
+    dom = "dominance-mouse"
+    state = state.replace(turn_index=idx, phase=Phase.DAYLIGHT)
+    state = _set_fs(state, M, hand=(dom,), vp=9)
+    assert not any(isinstance(a, ActivateDominance) for a in legal_actions(state)), \
+        "VP9 では発動不可(3.3.1)"
+    state = _set_fs(state, M, hand=(dom,), vp=10)
+    acts = [a for a in legal_actions(state) if isinstance(a, ActivateDominance)]
+    assert acts, "VP10 で発動可能(3.3.1)"
+    state = apply(state, acts[0], rng)
+    ms = state.fs(M)
+    assert ms.dominance_card == dom and dom not in ms.hand, "発動→公開・手札から除去"
+    assert award_vp(state, M, 5).fs(M).vp == ms.vp, "発動後は VP 凍結(award_vp no-op)"
+    print("  dominance activate: 9->illegal, 10->legal, vp frozen at %d" % ms.vp)
+
+
+def test_dominance_general_victory() -> None:
+    """一般圧倒勝利(3.3.1.I): mouse 3広場支配で勝利、2広場では勝利しない(14.8-2)。"""
+    rng = random.Random(102)
+    base = _resolve_setup(new_game((M, E, A), rng), rng)
+    idx = base.factions.index(M)
+    base = _set_fs(base, M, hand=(), vp=10, dominance_card="dominance-mouse")
+    mouse = [c.cid for c in base.clearings
+             if base.map.clearing(c.cid).suit == Suit.MOUSE]
+
+    def prep(control):
+        s = base
+        for cid in mouse:
+            s = _clear(s, cid)
+        s = _sole_control(s, M, control)
+        return s.replace(turn_index=idx, phase=Phase.BIRDSONG)
+
+    assert not check_dominance_victory(prep(mouse[:2])).finished, "2広場では勝利しない"
+    win = check_dominance_victory(prep(mouse[:3]))
+    assert win.finished and win.winner == M, "mouse3広場支配で圧倒勝利(3.3.1.I)"
+    print("  general dominance: 2 clearings -> no, 3 clearings -> win")
+
+
+def test_dominance_bird_victory() -> None:
+    """鳥圧倒勝利(3.3.1.II): 対角隅 NW+SE で勝利、NW+NE では勝利しない(14.8-3)。"""
+    rng = random.Random(103)
+    base = _resolve_setup(new_game((M, E, A), rng), rng)
+    idx = base.factions.index(M)
+    base = _set_fs(base, M, hand=(), vp=10, dominance_card="dominance-bird")
+    nw = base.map.corner_clearing(Corner.NW)
+    ne = base.map.corner_clearing(Corner.NE)
+    se = base.map.corner_clearing(Corner.SE)
+    sw = base.map.corner_clearing(Corner.SW)
+
+    def prep(control):
+        s = _sole_control(base, M, [nw, ne, se, sw])  # 4隅を一旦消去して置換
+        for cid in [nw, ne, se, sw]:
+            s = _clear(s, cid)
+        s = _sole_control(s, M, control)
+        return s.replace(turn_index=idx, phase=Phase.BIRDSONG)
+
+    assert not check_dominance_victory(prep([nw, ne])).finished, "隣接隅では勝利しない"
+    win = check_dominance_victory(prep([nw, se]))
+    assert win.finished and win.winner == M, "対角隅 NW+SE 支配で圧倒勝利(3.3.1.II)"
+    print("  bird dominance: NW+NE -> no, NW+SE -> win")
+
+
+def test_dominance_cost_and_recover() -> None:
+    """コスト消費→盤脇→回収(3.3.3/3.3.4)。鳥圧倒は非鳥カードで回収不可(14.8-4)。"""
+    rng = random.Random(104)
+    base = _resolve_setup(new_game((M, E, A), rng), rng)
+    idx = base.factions.index(M)
+
+    # 3.3.3: 圧倒カードは捨て山でなく盤脇へ
+    s = to_discard(base, "dominance-mouse")
+    assert "dominance-mouse" in s.dominance_aside and "dominance-mouse" not in s.discard, \
+        "圧倒カードは盤脇へ(3.3.3)"
+
+    # 3.3.4: 盤脇の mouse 圧倒 + 手札の mouse カード → 回収が合法
+    mouse_card = _cards_of_suit(base, Suit.MOUSE, 1)[0]
+    s = _set_fs(base, M, hand=(mouse_card,)).replace(
+        dominance_aside=("dominance-mouse",), turn_index=idx, phase=Phase.DAYLIGHT)
+    takes = [a for a in legal_actions(s) if isinstance(a, TakeDominance)]
+    assert takes, "一致動物種カードで回収が合法(3.3.4)"
+    s2 = apply(s, takes[0], rng)
+    assert "dominance-mouse" in s2.fs(M).hand, "圧倒カードを手札へ"
+    assert not s2.dominance_aside and mouse_card not in s2.fs(M).hand, "盤脇除去・支払消費"
+
+    # 3.3.4/2.1.1.II: 鳥圧倒は非鳥カードで回収不可、鳥カードなら可
+    fox_card = _cards_of_suit(base, Suit.FOX, 1)[0]
+    s3 = _set_fs(base, M, hand=(fox_card,)).replace(
+        dominance_aside=("dominance-bird",), turn_index=idx, phase=Phase.DAYLIGHT)
+    assert not any(isinstance(a, TakeDominance) for a in legal_actions(s3)), \
+        "鳥圧倒は非鳥カードで回収不可(3.3.4)"
+    bird_card = _cards_of_suit(base, Suit.BIRD, 1)[0]
+    s4 = _set_fs(base, M, hand=(bird_card,)).replace(
+        dominance_aside=("dominance-bird",), turn_index=idx, phase=Phase.DAYLIGHT)
+    assert any(isinstance(a, TakeDominance) for a in legal_actions(s4)), "鳥カードで回収可"
+    print("  cost/recover: aside not discard, mouse recovered, bird needs bird card")
+
+
+def test_dominance_evening_discard() -> None:
+    """夕闇の手札調整で圧倒カードを捨てると盤脇へ(捨て山に入らない, 14.8-5)。"""
+    rng = random.Random(105)
+    state = _resolve_setup(new_game((M, E, A), rng), rng)
+    idx = state.factions.index(M)
+    dom = "dominance-fox"
+    extra = _cards_of_suit(state, Suit.RABBIT, 6)
+    state = _set_fs(state, M, hand=(dom,) + tuple(extra))
+    state = state.replace(turn_index=idx, phase=Phase.EVENING,
+                          pending=(DiscardDecision(actor=M),))
+    state = apply(state, DiscardCard(player=M, card_id=dom), rng)
+    assert dom in state.dominance_aside, "捨てた圧倒カードは盤脇へ(3.3.3/14.3)"
+    assert dom not in state.discard, "捨て山には入らない"
+    print("  evening discard: dominance card routed to aside, not discard")
+
+
+def test_coalition() -> None:
+    """共闘軍(9.2.8): 3人戦非合法 / 4人戦で最低VP・同点複数 / 敵対→無関心 /
+    相手勝利で winners に部族 / 結成後 VP 凍結(14.8-6)。"""
+    from .factions.vagabond import _rel_get, _rel_set
+    rng = random.Random(106)
+
+    # 3人戦(M,V,E)では共闘不可
+    s3 = _resolve_setup(new_game((M, V, E), rng), rng)
+    s3 = _set_fs(s3, V, hand=("dominance-fox",)).replace(
+        turn_index=s3.factions.index(V), phase=Phase.DAYLIGHT)
+    assert not any(isinstance(a, VagabondCoalition) for a in legal_actions(s3)), \
+        "3人戦では共闘不可(9.2.8)"
+
+    # 4人戦(M,E,A,V): 最低VP対象
+    state = _resolve_setup(new_game((M, E, A, V), rng), rng)
+    vidx = state.factions.index(V)
+    state = state.replace(turn_index=vidx, phase=Phase.DAYLIGHT)
+    state = _set_fs(state, V, hand=("dominance-fox",))
+    state = _set_fs(state, M, vp=0)
+    state = _set_fs(state, E, vp=1)
+    state = _set_fs(state, A, vp=2)
+    coals = [a for a in legal_actions(state) if isinstance(a, VagabondCoalition)]
+    assert {a.partner for a in coals} == {M}, "最低VPのMのみ対象(9.2.8)"
+    tie = _set_fs(state, E, vp=0)
+    coals_tie = [a for a in legal_actions(tie) if isinstance(a, VagabondCoalition)]
+    assert {a.partner for a in coals_tie} == {M, E}, "同点は複数候補(9.2.8)"
+
+    # 敵対派閥(M=-1)と共闘 → 無関心(0)へ(9.2.9.III.d)
+    vs = dataclasses.replace(state.vagabond(),
+                             relationships=_rel_set(state.vagabond(), M, -1))
+    hostile = state.with_faction_state(vs)
+    act = [a for a in legal_actions(hostile)
+           if isinstance(a, VagabondCoalition) and a.partner == M][0]
+    after = apply(hostile, act, rng)
+    av = after.vagabond()
+    assert av.coalition_with == M and av.dominance_card == "dominance-fox", \
+        "共闘相手=M・カードは公開扱いで保持(9.2.8)"
+    assert _rel_get(av, M) == 0, "敵対派閥との共闘で無関心へ(9.2.9.III.d)"
+    assert award_vp(after, V, 5).vagabond().vp == av.vp, "共闘後 VP 凍結(9.2.8)"
+
+    # 相手Mの勝利で部族も勝者(winners)
+    won = after.replace(winner=M, finished=True)
+    assert set(won.winners) == {M, V}, "共闘相手の勝利で部族も勝者(9.2.8)"
+    print("  coalition: 3p illegal, min-vp target, tie->2, hostile->indifferent, winners={M,V}")
+
+
+def test_dominance_card_conservation() -> None:
+    """カード保存則54枚が dominance_card / dominance_aside 込みで成立(14.8-7)。"""
+    rng = random.Random(107)
+    state = _resolve_setup(new_game((M, E, A, V), rng), rng)
+    doms = [c for c in state.deck if state.cards.get(c).is_dominance]
+    assert len(doms) >= 2, "山札に圧倒カードが2枚以上残っている前提"
+    # 1枚を発動(dominance_card)、1枚を盤脇へ(dominance_aside)。山札から移すので保存
+    state = _pull_from_deck(state, doms[0])
+    state = _set_fs(state, M, dominance_card=doms[0])
+    state = _pull_from_deck(state, doms[1])
+    state = state.replace(dominance_aside=(doms[1],))
+    state.validate()  # 保存則が2ゾーン込みで成立
+    print("  conservation: validate() ok with dominance_card=%s aside=%s"
+          % (doms[0], doms[1]))
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
@@ -812,6 +1029,20 @@ def main() -> int:
     test_vagabond_evening()
     print("selftest: vagabond quest (9.5.5)")
     test_vagabond_quest()
+    print("selftest: dominance activation (3.3.1)")
+    test_dominance_activation()
+    print("selftest: dominance general victory (3.3.1.I)")
+    test_dominance_general_victory()
+    print("selftest: dominance bird victory (3.3.1.II)")
+    test_dominance_bird_victory()
+    print("selftest: dominance cost & recover (3.3.3/3.3.4)")
+    test_dominance_cost_and_recover()
+    print("selftest: dominance evening discard (3.3.3)")
+    test_dominance_evening_discard()
+    print("selftest: coalition (9.2.8)")
+    test_coalition()
+    print("selftest: dominance card conservation (validate)")
+    test_dominance_card_conservation()
     print("OK")
     return 0
 

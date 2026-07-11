@@ -10,6 +10,7 @@ from typing import List
 
 from .actions import (
     Action,
+    ActivateDominance,
     AllocateHitsDecision,
     AmbushAttackerDecision,
     AmbushChoice,
@@ -27,12 +28,14 @@ from .actions import (
     SetupChooseKeep,
     SetupKeepDecision,
     SupportersLimitDecision,
+    TakeDominance,
+    VagabondCoalition,
     VagabondSetupCharacterDecision,
     VagabondSetupForestDecision,
 )
 from .battle import _matching_ambush, allocate_options
 from .state import GameState
-from .types import Corner
+from .types import Corner, FactionId, Phase, Suit
 
 
 def legal_actions(state: GameState) -> List[Action]:
@@ -42,7 +45,88 @@ def legal_actions(state: GameState) -> List[Action]:
     if state.pending:
         return _decision_options(state)
     from .factions import get_logic
-    return get_logic(state.current_faction()).legal_actions(state)
+    acts = get_logic(state.current_faction()).legal_actions(state)
+    # 昼光の共通自由アクション: 圧倒カード発動/回収・共闘軍(3.3 / 9.2.8)。
+    # 派閥ロジックには足さず、ここで共通フックとして追加する(14.4)。
+    if state.phase == Phase.DAYLIGHT:
+        acts = list(acts) + _common_daylight_actions(state)
+    return acts
+
+
+def _dedup_by_base(state: GameState, card_ids) -> List[str]:
+    """base_id が同じカードは1つに畳む(手札順を保つ, 決定性 10.2)。"""
+    seen = set()
+    out: List[str] = []
+    for cid in card_ids:
+        base = state.cards.base_id(cid)
+        if base in seen:
+            continue
+        seen.add(base)
+        out.append(cid)
+    return out
+
+
+def _spend_candidates(state: GameState, hand, dom_suit: Suit) -> List[str]:
+    """圧倒回収の支払いに使える手札カード(3.3.4 / 2.1.1)。
+
+    鳥の圧倒には鳥カードのみ。一般の圧倒には一致動物種+鳥(ワイルド)。
+    """
+    out: List[str] = []
+    for cid in hand:
+        s = state.cards.suit_of(cid)
+        if dom_suit == Suit.BIRD:
+            if s == Suit.BIRD:
+                out.append(cid)
+        elif s == dom_suit or s == Suit.BIRD:
+            out.append(cid)
+    return _dedup_by_base(state, out)
+
+
+def _coalition_partners(state: GameState) -> List[FactionId]:
+    """共闘軍の対象候補(9.2.8): 圧倒未発動・共闘未結成の他派閥のうち最低VP。
+
+    同点なら複数候補を返す(放浪部族が選択, 決定性=factions 定義順)。
+    """
+    eligible = [f for f in state.factions
+                if f != FactionId.VAGABOND
+                and state.fs(f).dominance_card is None]
+    if not eligible:
+        return []
+    lowest = min(state.fs(f).vp for f in eligible)
+    return [f for f in eligible if state.fs(f).vp == lowest]
+
+
+def _common_daylight_actions(state: GameState) -> List[Action]:
+    """昼光の圧倒/共闘の共通合法手(3.3 / 9.2.8)。手番派閥のみ。"""
+    f = state.current_faction()
+    fs = state.fs(f)
+    out: List[Action] = []
+    hand_dominance = _dedup_by_base(
+        state, [c for c in fs.hand if state.cards.get(c).is_dominance])
+
+    if f == FactionId.VAGABOND:
+        # 放浪部族は圧倒発動不可。代わりに共闘軍(9.2.8, 4人以上戦)。
+        if (len(state.factions) >= 4 and fs.coalition_with is None
+                and hand_dominance):
+            partners = _coalition_partners(state)
+            for card_id in hand_dominance:
+                for partner in partners:
+                    out.append(VagabondCoalition(
+                        player=f, card_id=card_id, partner=partner))
+        return out
+
+    # 圧倒発動(3.3.1): VP10以上・未発動・手札に圧倒カード
+    if fs.dominance_card is None and fs.vp >= 10:
+        for card_id in hand_dominance:
+            out.append(ActivateDominance(player=f, card_id=card_id))
+
+    # 圧倒回収(3.3.4): 盤脇に圧倒カードがあり一致動物種の手札で支払える
+    for dom_id in state.dominance_aside:
+        dom_suit = state.cards.suit_of(dom_id)
+        for spend_id in _spend_candidates(state, fs.hand, dom_suit):
+            out.append(TakeDominance(
+                player=f, spend_card_id=spend_id, dominance_id=dom_id))
+    return out
 
 
 def _decision_options(state: GameState) -> List[Action]:

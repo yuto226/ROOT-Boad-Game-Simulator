@@ -139,6 +139,9 @@ class FactionState:
     crafted_cards: Tuple[str, ...] = ()   # 手元の継続効果カード(4.1.3)
     items: Tuple[ItemKind, ...] = ()      # 作成済みアイテム
     soldiers_supply: int = 0              # サプライにある兵士コマ数
+    #: 発動して手元に公開中の圧倒カードID(3.3.1/3.3.2)。None→非Noneの一方向。
+    #: 非None の間は VP 凍結(mechanics.award_vp が no-op, 3.3.1)。
+    dominance_card: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -256,6 +259,8 @@ class VagabondState(FactionState):
     slip_used: bool = False
     #: 戦闘中に自アイテム損傷で満たしたヒット数(9.2.9.II.d 用。宣言時リセット)
     damage_hits_this_battle: int = 0
+    #: 共闘軍の相手派閥(9.2.8)。None→非Noneの一方向。非None の間は VP 凍結。
+    coalition_with: Optional[FactionId] = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +283,9 @@ class GameState:
     turn_count: int = 0                       # 経過ターン数(安全弁, 3.8)
     deck: Tuple[str, ...] = ()
     discard: Tuple[str, ...] = ()
+    #: コスト消費でゲーム盤の横に置かれた圧倒カード(3.3.3)。捨て山ではない。
+    #: 3.3.4 の回収対象。カード保存則(validate)の勘定に含める。
+    dominance_aside: Tuple[str, ...] = ()
     supply_items: Tuple[Tuple[ItemKind, int], ...] = ()  # サプライのアイテム残数
     pending: Tuple = ()                        # 保留デシジョンスタック(3.2)
     winner: Optional[FactionId] = None
@@ -286,6 +294,24 @@ class GameState:
     # --- 参照 ---
     def current_faction(self) -> FactionId:
         return self.factions[self.turn_index]
+
+    @property
+    def winners(self) -> Tuple[FactionId, ...]:
+        """勝者の集合(3.1 / 9.2.8)。
+
+        主勝者 ``winner`` に加え、共闘軍(9.2.8)を結成した放浪部族の共闘相手が
+        主勝者なら放浪部族も勝者に含める。未確定なら空タプル。
+        """
+        if self.winner is None:
+            return ()
+        result = [self.winner]
+        if FactionId.VAGABOND in self.factions:
+            vs = self.vagabond()
+            if (vs.coalition_with is not None
+                    and vs.coalition_with == self.winner
+                    and FactionId.VAGABOND not in result):
+                result.append(FactionId.VAGABOND)
+        return tuple(result)
 
     def to_act(self) -> FactionId:
         """次に選択すべきプレイヤー(3.2)。"""
@@ -456,8 +482,12 @@ class GameState:
         dominance = sum(d.copies for d in self.cards.defs if d.is_dominance)
         expected = total_cards - (dominance if len(self.factions) == 2 else 0)
         count = len(self.deck) + len(self.discard)
+        # 圧倒カードの2ゾーン(3.3.2 公開中 / 3.3.3 盤脇)を勘定に加える(14.1)
+        count += len(self.dominance_aside)
         for fs in self.faction_states:
             count += len(fs.hand) + len(fs.crafted_cards)
+            if fs.dominance_card is not None:
+                count += 1
         if FactionId.ALLIANCE in self.factions:
             count += len(self.alliance().supporters)
         if FactionId.EYRIE in self.factions:

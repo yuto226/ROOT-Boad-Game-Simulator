@@ -41,7 +41,7 @@ from ..actions import (
     SupportersLimitDecision,
 )
 from ..crafting import legal_crafts
-from ..mechanics import draw_cards
+from ..mechanics import award_vp, draw_cards, to_discard
 from ..state import GameState
 from ..types import (
     B_BASE,
@@ -71,7 +71,7 @@ def add_supporter(state: GameState, card_id: str) -> GameState:
     """
     als = state.alliance()
     if len(als.bases_placed) == 0 and len(als.supporters) >= 5:
-        return state.replace(discard=state.discard + (card_id,))
+        return to_discard(state, card_id)  # 圧倒カードは盤脇へ(3.3.3/14.3)
     return state.with_faction_state(
         dataclasses.replace(als, supporters=als.supporters + (card_id,)))
 
@@ -102,7 +102,9 @@ def _pay_supporters(state: GameState, pay: List[str]) -> GameState:
     for c in pay:
         supporters.remove(c)
     state = state.with_faction_state(dataclasses.replace(als, supporters=tuple(supporters)))
-    return state.replace(discard=state.discard + tuple(pay))
+    for c in pay:  # 圧倒カードは盤脇へ(3.3.3/14.3)
+        state = to_discard(state, c)
+    return state
 
 
 def sympathetic_clearings(state: GameState) -> List[int]:
@@ -126,8 +128,10 @@ def _place_sympathy(state: GameState, cid: int) -> GameState:
     cs = state.clearing(cid).add_token(Piece(ALLIANCE, T_SYMPATHY))
     state = state.with_clearing(cs)
     als = state.alliance()
-    return state.with_faction_state(dataclasses.replace(
-        als, placed_sympathy=als.placed_sympathy + 1, vp=als.vp + vp))
+    state = state.with_faction_state(dataclasses.replace(
+        als, placed_sympathy=als.placed_sympathy + 1))
+    # 支持露出VP(8.4.2.III)は中央ヘルパ経由(VP凍結・非負クランプ, 14.2)
+    return award_vp(state, ALLIANCE, vp)
 
 
 def _martial_law(state: GameState, cid: int) -> bool:
@@ -185,7 +189,8 @@ def on_base_removed(state: GameState, clearing: int) -> GameState:
         officers=als.officers - removed_officers,
         soldiers_supply=als.soldiers_supply + removed_officers)
     state = state.with_faction_state(als)
-    state = state.replace(discard=state.discard + tuple(discarded))
+    for c in discarded:  # 圧倒カードは盤脇へ(3.3.3/14.3)
+        state = to_discard(state, c)
     if not bases and len(kept) > 5:
         state = state.push_pending(SupportersLimitDecision(actor=ALLIANCE))
     return state
@@ -618,7 +623,7 @@ def apply_discard_supporter(state: GameState, action: AllianceDiscardSupporter,
     supporters = list(als.supporters)
     supporters.remove(action.card_id)
     state = state.with_faction_state(dataclasses.replace(als, supporters=tuple(supporters)))
-    state = state.replace(discard=state.discard + (action.card_id,))
+    state = to_discard(state, action.card_id)  # 圧倒カードは盤脇へ(3.3.3/14.3)
     if len(state.alliance().supporters) <= 5:
         state = state.pop_pending()
     return state

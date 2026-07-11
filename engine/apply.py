@@ -11,6 +11,7 @@ from typing import Optional, Set
 from . import battle as battle_mod
 from .actions import (
     Action,
+    ActivateDominance,
     AllianceDiscardSupporter,
     AllianceEndOps,
     AllianceMobilize,
@@ -50,8 +51,10 @@ from .actions import (
     OutragePay,
     RefreshDecision,
     SetupChooseKeep,
+    TakeDominance,
     VagabondAid,
     VagabondBattle,
+    VagabondCoalition,
     VagabondChooseCharacter,
     VagabondChooseForest,
     VagabondExplore,
@@ -98,6 +101,9 @@ def _check_victory(state: GameState) -> GameState:
     order = [state.current_faction()] + [
         f for f in state.factions if f != state.current_faction()]
     for f in order:
+        # 圧倒カード発動済み派閥はVP凍結(3.3.1)。30VP勝利の対象外(14.5)。
+        if state.fs(f).dominance_card is not None:
+            continue
         if state.fs(f).vp >= 30:
             return state.replace(winner=f, finished=True)
     return state
@@ -115,6 +121,11 @@ def _apply_end_phase(state: GameState, action: EndPhase, rng) -> GameState:
         nxt = (state.turn_index + 1) % len(state.factions)
         state = state.replace(phase=Phase.BIRDSONG, turn_index=nxt,
                               turn_count=state.turn_count + 1)
+        # 3.3.1: 新手番の鳥歌開始時に圧倒勝利判定(begin_phase の前, 14.5)
+        from .game import check_dominance_victory
+        state = check_dominance_victory(state)
+        if state.finished:
+            return state
     return get_logic(state.current_faction()).begin_phase(state, rng)
 
 
@@ -206,8 +217,11 @@ def _apply_build(state: GameState, action: MarquiseBuild, rng) -> GameState:
     ms = state.marquise()
     field = {"sawmill": "built_sawmill", "workshop": "built_workshop",
              "recruiter": "built_recruiter"}[action.kind]
-    ms = dataclasses.replace(ms, vp=ms.vp + vp, **{field: getattr(ms, field) + 1})
+    ms = dataclasses.replace(ms, **{field: getattr(ms, field) + 1})
     state = state.with_faction_state(ms)
+    # 建設VP(6.5.4.III)は中央ヘルパ経由(VP凍結・非負クランプ, 14.2)
+    from .mechanics import award_vp
+    state = award_vp(state, FactionId.MARQUISE, vp)
     return _spend_action(state)
 
 
@@ -311,8 +325,52 @@ def _apply_vagabond_item_choice(state: GameState, action: VagabondItemChoice,
     raise AssertionError("VagabondItemChoice without item decision")
 
 
+# ---------------- 圧倒カード / 共闘軍(3.3 / 9.2.8) ----------------
+def _apply_activate_dominance(state: GameState, action: ActivateDominance,
+                              rng) -> GameState:
+    """圧倒カードの発動(3.3.1)。手札→公開(fs.dominance_card)。以後VP凍結。"""
+    fs = state.fs(action.player)
+    hand = list(fs.hand)
+    hand.remove(action.card_id)
+    # 得点マーカーを得点表から取り除く=以後 award_vp が no-op(14.2)。VPは据え置く。
+    return state.with_faction_state(
+        dataclasses.replace(fs, hand=tuple(hand), dominance_card=action.card_id))
+
+
+def _apply_take_dominance(state: GameState, action: TakeDominance,
+                          rng) -> GameState:
+    """盤脇の圧倒カードの回収(3.3.4)。一致動物種カードを消費し圧倒を手札へ。"""
+    # 支払カードは捨て山へ(圧倒カードなら盤脇へ, discard_card→to_discard 経由)
+    state = discard_card(state, action.player, action.spend_card_id)
+    aside = list(state.dominance_aside)
+    aside.remove(action.dominance_id)
+    state = state.replace(dominance_aside=tuple(aside))
+    fs = state.fs(action.player)
+    return state.with_faction_state(
+        dataclasses.replace(fs, hand=fs.hand + (action.dominance_id,)))
+
+
+def _apply_vagabond_coalition(state: GameState, action: VagabondCoalition,
+                              rng) -> GameState:
+    """共闘軍の結成(9.2.8)。圧倒カードを公開扱いで保持し partner と共闘。"""
+    from .factions.vagabond import _rel_get, _rel_set
+    vs = state.vagabond()
+    hand = list(vs.hand)
+    hand.remove(action.card_id)
+    # カードは公開扱い(保存則の勘定用に dominance_card に保持)。以後VP凍結。
+    vs = dataclasses.replace(vs, hand=tuple(hand), dominance_card=action.card_id,
+                             coalition_with=action.partner)
+    # 敵対派閥と共闘するなら関係マーカーを無関心へ戻す(9.2.9.III.d)
+    if _rel_get(vs, action.partner) == -1:
+        vs = dataclasses.replace(vs, relationships=_rel_set(vs, action.partner, 0))
+    return state.with_faction_state(vs)
+
+
 _HANDLERS = {
     EndPhase: _apply_end_phase,
+    ActivateDominance: _apply_activate_dominance,
+    TakeDominance: _apply_take_dominance,
+    VagabondCoalition: _apply_vagabond_coalition,
     SetupChooseKeep: _apply_choose_keep,
     MarquiseBuild: _apply_build,
     MarquiseRecruit: _apply_recruit,

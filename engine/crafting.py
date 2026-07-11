@@ -206,8 +206,10 @@ def apply_craft(state: GameState, action: CraftCard, rng) -> GameState:
             als, used_sympathy_clearings=als.used_sympathy_clearings + tuple(pay)))
     state = state.take_item(item)
     fs = state.fs(faction)
-    new_fs = dataclasses.replace(fs, items=fs.items + (item,), vp=fs.vp + vp)
-    state = state.with_faction_state(new_fs)
+    state = state.with_faction_state(dataclasses.replace(fs, items=fs.items + (item,)))
+    # クラフトVP(3.2.2)は中央ヘルパ経由(VP凍結・非負クランプ, 14.2)
+    from .mechanics import award_vp
+    state = award_vp(state, faction, vp)
     if faction == FactionId.MARQUISE:
         ms = state.marquise()
         state = state.with_faction_state(dataclasses.replace(ms, workshop_used=True))

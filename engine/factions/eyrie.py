@@ -33,7 +33,7 @@ from ..actions import (
     EyrieTurmoil,
 )
 from ..crafting import legal_crafts
-from ..mechanics import draw_cards
+from ..mechanics import award_vp, draw_cards, to_discard
 from ..state import EyrieState, GameState
 from ..types import (
     B_ROOST,
@@ -320,7 +320,8 @@ class EyrieLogic(FactionLogic):
         # 7.6.1 VP獲得: 止まり木エリア最右空き枠 = roost_vp[マップ上の枚数-1]
         if es.built_roosts > 0:
             vp = state.board_defs["eyrie"]["roost_vp"][es.built_roosts - 1]
-            state = state.with_faction_state(dataclasses.replace(es, vp=es.vp + vp))
+            # 止まり木VP(7.6.1)は中央ヘルパ経由(VP凍結・非負クランプ, 14.2)
+            state = award_vp(state, EYRIE, vp)
         # 7.6.2 ドロー(1+露出アイコン数)、手札6枚以上なら5枚に
         state = draw_cards(state, EYRIE, 1 + visible_card_icons(state), rng)
         if len(state.fs(EYRIE).hand) > 5:
@@ -491,17 +492,20 @@ def apply_turmoil(state: GameState, action: EyrieTurmoil, rng) -> GameState:
     # 7.7.1 恥辱: 勅令内の鳥カード枚数(忠臣2枚含む)ぶんVP喪失。0未満不可
     birds = sum(1 for col in es.decree for c in col
                 if card_suit(state, c) == Suit.BIRD)
-    vp = max(0, es.vp - birds)
     # 7.7.2 追放: 忠臣カード以外の全勅令カードを捨て山へ
     purged = tuple(c for col in es.decree for c in col if c != LOYAL_VIZIER)
     # 7.7.3 失脚: 現君主を裏向きに。全裏なら全表に戻す(7.7.3.I 新世代)
     used = es.used_leaders + ((es.leader,) if es.leader else ())
     if len(used) >= len(EYRIE_LEADERS):
         used = ()
-    es = dataclasses.replace(es, vp=vp, leader=None, used_leaders=used,
+    es = dataclasses.replace(es, leader=None, used_leaders=used,
                              decree=((), (), (), ()),
                              decree_remaining=((), (), (), ()))
-    state = state.with_faction_state(es).replace(discard=state.discard + purged)
+    state = state.with_faction_state(es)
+    # 7.7.1 恥辱のVP喪失は中央ヘルパ経由(非負クランプ 7.7.1 / VP凍結 14.2)
+    state = award_vp(state, EYRIE, -birds)
+    for c in purged:  # 圧倒カードは盤脇へ(3.3.3/14.3)
+        state = to_discard(state, c)
     # 君主交代の選択(7.7.3)。選択の適用時に休止(7.7.4)で夕闇へ
     return state.push_pending(EyrieLeaderDecision(actor=EYRIE, turmoil=True))
 

@@ -45,7 +45,7 @@ from ..actions import (
     VagabondStrike,
 )
 from ..crafting import legal_crafts
-from ..mechanics import draw_cards
+from ..mechanics import award_vp, draw_cards
 from ..state import GameState, ItemTile, VagabondState
 from ..types import FactionId, ItemKind, Phase, Suit
 from . import FactionLogic, register
@@ -298,8 +298,8 @@ def on_vagabond_removes(state: GameState, victim: FactionId,
     rel = _rel_get(vs, victim)
     if rel == -1:  # 既に敵対
         if battle and state.current_faction() == VAGABOND:
-            vs2 = state.vagabond()
-            return state.with_faction_state(replace(vs2, vp=vs2.vp + 1))
+            # 悪名 +1VP(9.2.9.III.a)は中央ヘルパ経由(VP凍結・非負, 14.2)
+            return award_vp(state, VAGABOND, 1)
         return state
     if is_soldier:  # 非敵対の兵士除去 → 即敵対化
         return state.with_faction_state(replace(vs, relationships=_rel_set(vs, victim, -1)))
@@ -765,8 +765,10 @@ def apply_explore(state: GameState, action: VagabondExplore, rng) -> GameState:
     idx = next(i for i, (cid, _) in enumerate(ruin) if cid == c)
     _, kind = ruin.pop(idx)
     items = _add_item(items, kind)
-    vs = replace(vs, items=items, ruin_items=tuple(ruin), vp=vs.vp + 1)
+    vs = replace(vs, items=items, ruin_items=tuple(ruin))
     state = state.with_faction_state(vs)
+    # 探索の +1VP(9.5.3)は中央ヘルパ経由(VP凍結・非負, 14.2)
+    state = award_vp(state, VAGABOND, 1)
     if not any(cid == c for cid, _ in ruin):
         cs = state.clearing(c)
         if cs.ruin:
@@ -802,17 +804,17 @@ def _adjust_relationship_on_aid(state: GameState, faction: FactionId) -> GameSta
     rel = _rel_get(vs, faction)
     if rel == -1:  # 敵対: 関係は動かない(III.c)。アイテム取得は上で完了済み
         return state
-    if rel >= 3:  # 同盟: 援助毎+2VP(II.a)
-        return state.with_faction_state(replace(vs, vp=vs.vp + cfg["allied_aid_vp"]))
+    if rel >= 3:  # 同盟: 援助毎+2VP(II.a)。中央ヘルパ経由(VP凍結・非負, 14.2)
+        return award_vp(state, VAGABOND, cfg["allied_aid_vp"])
     aids = _aids_get(vs, faction) + 1
     cost = cfg["relationship_aid_costs"][rel]
     if aids >= cost:  # 強化(I.b): 1マス進めて到達マスのVP、援助回数リセット
         gain = cfg["relationship_vp"][rel]
-        vs = replace(vs, vp=vs.vp + gain,
-                     relationships=_rel_set(vs, faction, rel + 1),
+        vs = replace(vs, relationships=_rel_set(vs, faction, rel + 1),
                      aids_this_turn=_aids_set(vs, faction, 0))
-    else:
-        vs = replace(vs, aids_this_turn=_aids_set(vs, faction, aids))
+        state = state.with_faction_state(vs)
+        return award_vp(state, VAGABOND, gain)
+    vs = replace(vs, aids_this_turn=_aids_set(vs, faction, aids))
     return state.with_faction_state(vs)
 
 
@@ -835,8 +837,8 @@ def apply_quest(state: GameState, action: VagabondQuest, rng) -> GameState:
     if action.reward == "vp":
         suit = qdef["suit"]
         n = sum(1 for q in done if _quest_def(q)["suit"] == suit)  # 今解決分を含む
-        vs = state.vagabond()
-        state = state.with_faction_state(replace(vs, vp=vs.vp + n))
+        # クエスト報酬VP(9.5.5)は中央ヘルパ経由(VP凍結・非負, 14.2)
+        state = award_vp(state, VAGABOND, n)
     else:  # cards: 2ドロー
         state = draw_cards(state, VAGABOND, 2, rng)
     return state
@@ -871,7 +873,9 @@ def apply_craft_vagabond(state: GameState, action, rng) -> GameState:
     for _ in range(len(cdef.cost)):
         items = _pay(items, HAMMER)
     items = _add_item(items, item.value)
-    state = state.with_faction_state(replace(vs, items=items, vp=vs.vp + vp))
+    state = state.with_faction_state(replace(vs, items=items))
+    # クラフトVP(3.2.2)は中央ヘルパ経由(VP凍結・非負, 14.2)
+    state = award_vp(state, VAGABOND, vp)
     state = state.take_item(item)
     return discard_card(state, VAGABOND, action.card_id)
 
