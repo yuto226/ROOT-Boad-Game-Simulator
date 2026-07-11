@@ -1209,3 +1209,121 @@ selftest 新シナリオ結果 / pytest 全件(xfail 0 になること) / smoke 
    `node --check` 相当、なければ python でスクリプトタグ抽出+簡易検査)。
    見た目の最終確認は Fable/ユーザーが行う
 4. レビュー注目点(ファイル:行)
+
+---
+
+## 18. ルール完全性C: immediate/persistent クラフト効果(Fable 2026-07-11。実装者はこの設計に従うこと)
+
+ルールの正: `rules/common.md` 4.1.2/4.1.3/4.1.4/4.3.3、カード定義=`engine/data/cards.json`。
+ホワイトリスト(3.7)を拡張する。**Codebreakers は対象外のまま**とする(効果=敵手札の
+閲覧。本エンジンは完全情報(12.3)なので情報価値ゼロ、クラフトが厳密劣位になるだけ)。
+代わりに **Scouting Party を追加**(奇襲は実装済みで安価に完結)。
+
+対象13種: Favor×3(immediate)/ Armorers, Sappers, Brutal Tactics, Scouting Party,
+Royal Claim, Better Burrow Bank, Cobbler, Command Warren, Stand and Deliver!,
+Tax Collector(persistent)。
+
+### 18.1 状態(state.py)
+
+- `FactionState` に追加:
+  - `crafted_effects: Tuple[str, ...] = ()` — 手元の継続効果カード(**base_id**)。
+    クラフト時にカードは手札から出て捨て山に行かず手元へ(4.1.3)。
+  - `effects_used: Tuple[str, ...] = ()` — 「1ターン1回」系の使用済み base_id。
+    自ターンの鳥歌 begin_phase でリセット(既存の潜入リセットと同じ場所)。
+- 重複禁止(4.1.4): 同 base_id が `crafted_effects` にあるカードはクラフト不可。
+
+### 18.2 クラフト拡張(crafting.py)
+
+- 候補生成の `type != "item"` スキップを撤廃し、`_EFFECT_WHITELIST`(上記13 base_id)に
+  ある immediate/persistent を合法化。コスト判定は既存ロジック共通。
+- `apply_craft` 分岐:
+  - **persistent**: 手札から除去し `crafted_effects` に base_id 追加(捨て山に行かない)。
+    VP なし。
+  - **immediate(Favor×3)**: カードの動物種と同 suit の全広場から**敵の全コマを除去**
+    して捨て札。除去は既存 `battle.remove_piece(source=クラフター)` を1個ずつ呼ぶ
+    (建物/トークンのVP・専制者・関係悪化・城砦返却などのフックを共通経路で通す)。
+    猫兵士の除去は**広場ごとに1イベント**として野戦病院(15.3)を発火させる
+    (battle側のイベント集計と同じ仕組みを使う。複数広場なら病院デシジョンも複数)。
+    敵=クラフター以外の全派閥(ダミー含む)。
+- 鷲巣の商業軽視(7.2.3)は item のみの規定なので変更不要(persistent/immediate は
+  元々VPなし。FavorのVPは除去フック経由で入る)。
+
+### 18.3 フェイズ効果(legal.py+factions/*)
+
+タイミングの簡略化(明記): カード文言の「フェイズ**開始時**」(Better Burrow Bank/
+Command Warren/Cobbler)は「**そのフェイズ中いつでも・1ターン1回**」に緩和する。
+(鷲巣がデクリー追加後にBBBでドローできる等の差は許容。厳密化はフェーズDで検討。)
+Royal Claim / Stand and Deliver! / Tax Collector は元々「フェイズ中(1回)」なので正確。
+
+- 新 Action **`UseCraftedEffect(player, card_key: str, target_faction: Optional[FactionId]=None, target_clearing: Optional[int]=None)`**
+  と、その適用で必要になる下記のデシジョン群を追加。
+- 合法手生成(所有+未使用+フェイズ一致のとき、通常の合法手に追加):
+  - **鳥歌**: `royal-claim`(パラメータなし)/ `stand-and-deliver`(target_faction=
+    手札1枚以上の敵ごと)/ `better-burrow-bank`(target_faction=敵ごと。自分のドローが
+    先、敵ドローは適用内で同時解決。山切れは既存の引けるだけルールに従う)
+  - **昼光**: `tax-collector`(target_clearing=自兵士のいる広場ごと)/
+    `command-warren`(パラメータなし。通常の戦闘宣言候補が1つ以上あるときのみ合法)
+  - **夕闇**: `cobbler`(パラメータなし。移動候補が1つ以上あるときのみ合法)。
+    夕闇に合法手ループがない派閥実装の場合、cobbler 保有時のみ「UseCraftedEffect or
+    EndPhase/EndTurn」のループを生成する(実装を確認して合わせること)
+- 適用:
+  - `royal-claim`: 支配広場数ぶん `mechanics.award_vp` → カードを手元から捨て山へ
+    (`to_discard` 経由。圧倒リダイレクト対応)
+  - `stand-and-deliver`: 対象の手札から**rng で1枚**奪い自手札へ、対象に1VP。
+    使用済みに記録(カードは手元に残る)
+  - `better-burrow-bank`: 自分1ドロー→対象敵1ドロー。使用済み記録
+  - `tax-collector`: 対象広場から自兵士1除去(`remove_piece`、猫なら野戦病院対象イベント)
+    →1ドロー。使用済み記録
+  - `command-warren`: 使用済み記録→ **`CommandWarrenDecision(actor)`** を push。
+    その合法手=通常の `DeclareBattle` 候補(**アクション消費なし**)。候補が必ず
+    1つ以上ある前提(合法条件で担保)なのでキャンセル肢は不要
+  - `cobbler`: 使用済み記録→ **`CobblerMoveDecision(actor)`** を push。合法手=
+    通常の移動候補(アクション消費なし)
+
+### 18.4 戦闘効果(battle.py、4.3.3)
+
+- 対象: `armorers`(攻守どちらでも)/ `sappers`(防御側のみ)/ `brutal-tactics`
+  (攻撃側のみ)/ `scouting-party`(攻撃側のみ・受動)。
+- **scouting-party**: 攻撃側が所有していたら**防御側の奇襲ステップを丸ごとスキップ**
+  (4.3.1に入らない)。`declare_battle` の奇襲分岐に条件追加のみ。破棄なし・毎戦闘有効。
+- ロール後・ヒット適用前に効果使用ステージを挿入(4.3.3。順序は
+  **攻撃側→防御側の固定順に簡略化**、1.1.3 の攻撃側任意順は採らない=明記):
+  - 各側に使用可能効果があるとき **`BattleEffectsDecision(actor=その側, ctx,
+    roll_att, roll_def)`** を push。合法手= `UseCraftedEffect(card_key=...)`(所有
+    効果ごと)+ **`SkipBattleEffects(player)`**(新Action、パラメータなし)。
+    1枚使うたび同デシジョンを再push(残り効果があれば。armorers+sappers の併用可)。
+  - `armorers`: 手元から捨て山へ。**自分が受けるロール由来ヒットを0にする**
+    (奇襲2ヒット・sappers/brutal の追加ヒットは軽減対象外=「rolled hits」限定)
+  - `sappers`(防御側): 手元から捨て山へ。攻撃側への追加1ヒット(兵士数上限
+    4.3.2.I の対象外=ロール由来ではない)
+  - `brutal-tactics`(攻撃側): **破棄しない**(毎戦闘使える)。防御側への追加1ヒット
+    +防御側に1VP(`award_vp`。圧倒中の相手ならVP凍結が既存処理で効く)
+- 実装は現行 `_roll_and_allocate` を「ロール→(効果ステージ)→ヒット確定→
+  allocation push」に分割。効果がなければ従来と同一経路。15.3/15.4 で入れた
+  `_finish_allocation`/roll_after の継続処理はそのまま使う。
+
+### 18.5 RL追随(catalog v4+encoder。5247e50 / 15.5 が手本)
+
+- catalog: `UseCraftedEffect`=(型名, card_key, target_faction?, target_clearing?) /
+  `SkipBattleEffects`=(型名,)。`CraftCard` は既存キー(base_id 全craftable列挙)を確認し、
+  不足があれば追加。**`CATALOG_VERSION = 4`**。
+- encoder: `_DECISION_TYPES` に `BattleEffectsDecision` / `CommandWarrenDecision` /
+  `CobblerMoveDecision` を追加。観測に**派閥ごとの crafted_effects multi-hot
+  (10 persistent種)+ effects_used multi-hot(1ターン1回系4種: stand-and-deliver,
+  better-burrow-bank, tax-collector, command-warren+cobbler=5種)**を追加
+  (perspective 順=既存の並びに従う)。
+
+### 18.6 検証と完了条件(subagent の報告に含めること)
+
+1. selftest 新シナリオ: (a) persistent クラフト→手元に置かれ VP なし・同名2枚目
+   不可(4.1.4) (b) Favor: 対象suit広場の敵全除去+建物/トークンVP+猫野戦病院の
+   発火 (c) Royal Claim の支配数VP+捨て札 (d) 戦闘: sappers/brutal-tactics の追加
+   ヒットと armorers の相殺(ロール分のみ)・brutal の防御側1VP (e) scouting-party
+   で奇襲スキップ (f) tax-collector 兵士除去+ドロー (g) command-warren 無消費戦闘 /
+   cobbler 無消費移動 (h) stand-and-deliver の奪取+1VP (i) BBB の双方ドロー
+2. `python3 -m pytest tests/ -q` 全パス+ランダム4派閥 200試合 `--validate` クリーン+
+   並列/直列の決定性一致(既存ツールで)
+3. 200試合での各効果の発動回数(参考値)
+4. rl: catalog v4 の size 報告+`python3 -m pytest tests/test_rl.py tests/test_ppo.py
+   tests/test_league.py -q`(.venv で)パス
+5. レビュー注目点(ファイル:行)
