@@ -21,4 +21,4 @@ simulation/dashboard.html
 
 # RL学習の出力(フェーズ6c)
 rl_runs/
-ui/game.json
+ui/json
