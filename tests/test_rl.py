@@ -36,9 +36,10 @@ _FACTIONS = (FactionId.MARQUISE, FactionId.EYRIE,
 # ============================================================
 def test_catalog_determinism():
     cat = ActionCatalog()
-    # size 固定・index↔key 全単射(catalog v4: 18.5 で UseCraftedEffect 32 +
-    # SkipBattleEffects 1 = 33 キー追加。8096 → 8129)
-    assert cat.size == 8129
+    # size 固定・index↔key 全単射(catalog v5: 19.4 で MarquiseChooseWood 12 +
+    # AllianceSpendSupporter 4 + VagabondExhaustItem 8 + VagabondRepairItem 8
+    # = 32 キー追加。8129 → 8161)
+    assert cat.size == 8161
     assert len(set(cat._keys)) == cat.size
     for i in range(cat.size):
         assert cat.index_of(cat.key_at(i)) == i

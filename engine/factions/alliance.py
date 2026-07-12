@@ -9,9 +9,9 @@
 設立し、訓練(8.5.3)で指揮官を増やして夕闇の軍事作戦(8.6.1)を行う。
 
 既知の簡略化(レビュー確認点):
-- 支援者カードの支払い(反乱・支持拡大)でどのカードを払うかは自動選択。
-  具体的な動物種のカードを先に、鳥カードを後に消費する決定的アルゴリズム
-  (鷲巣クラフトの eyrie_payment と同方針の割り切り, 4.1.1 相当)。
+- 支援者カードの支払い(反乱・支持拡大)は、一致suitと鳥の両方があるときだけ
+  SupporterPaymentDecision で選択化する(19.2)。片方のみなら従来どおり自動。
+  同 suit 内のどのカードを払うかは決定的(supporters タプルの先頭一致)=自動。
 - 戒厳令(8.4.2.II.a)の「他プレイヤーの兵士3個以上」は、連合以外の
   1派閥が単独で兵士3個以上を置いている場合と解釈する(傭兵等の読み替えは
   フェーズ1未対応)。
@@ -31,6 +31,7 @@ from ..actions import (
     AllianceOpOrganize,
     AllianceOpRecruit,
     AllianceRevolt,
+    AllianceSpendSupporter,
     AllianceSpreadSympathy,
     AllianceTrain,
     DeclareBattle,
@@ -38,6 +39,7 @@ from ..actions import (
     EndPhase,
     OutrageDecision,
     OutragePay,
+    SupporterPaymentDecision,
     SupportersLimitDecision,
 )
 from ..crafting import legal_crafts
@@ -95,16 +97,43 @@ def _supporter_payment(state: GameState, suit: Suit, n: int) -> Optional[List[st
     return chosen
 
 
-def _pay_supporters(state: GameState, pay: List[str]) -> GameState:
-    """支援者カードを支援者ボックスから捨て山へ移す。"""
+def _pay_one_supporter(state: GameState, pay_suit: Suit) -> GameState:
+    """pay_suit の支援者1枚を支援者ボックスから捨て山へ移す(19.2)。
+
+    同 suit 内のどのカードを払うかは決定的(supporters タプルの先頭一致)。
+    """
     als = state.alliance()
+    card = next(c for c in als.supporters if state.cards.suit_of(c) == pay_suit)
     supporters = list(als.supporters)
-    for c in pay:
-        supporters.remove(c)
-    state = state.with_faction_state(dataclasses.replace(als, supporters=tuple(supporters)))
-    for c in pay:  # 圧倒カードは盤脇へ(3.3.3/14.3)
-        state = to_discard(state, c)
-    return state
+    supporters.remove(card)
+    state = state.with_faction_state(
+        dataclasses.replace(als, supporters=tuple(supporters)))
+    return to_discard(state, card)  # 圧倒カードは盤脇へ(3.3.3/14.3)
+
+
+def _continue_supporter_payment(state: GameState, suit: Suit, remaining: int,
+                                purpose: str, clearing: int, rng) -> GameState:
+    """支援者支払いを、選択の余地がない間は自動で進める(19.2)。
+
+    一致suitと鳥の両方があるときだけ ``SupporterPaymentDecision`` を push して
+    選択化する(支払い1枚ごとに再push=このヘルパへ戻る)。remaining==0 に
+    なったら支払い完了後の処理(反乱の解決・支持トークン配置)へ接続する。
+    """
+    while remaining > 0:
+        als = state.alliance()
+        has_specific = any(state.cards.suit_of(c) == suit for c in als.supporters)
+        has_bird = any(state.cards.suit_of(c) == Suit.BIRD for c in als.supporters)
+        if has_specific and has_bird:
+            return state.push_pending(SupporterPaymentDecision(
+                actor=ALLIANCE, suit=suit, remaining=remaining,
+                purpose=purpose, clearing=clearing))
+        assert has_specific or has_bird, "insufficient supporters"
+        state = _pay_one_supporter(state, suit if has_specific else Suit.BIRD)
+        remaining -= 1
+    if purpose == "revolt":
+        return _finish_revolt(state, clearing, rng)
+    assert purpose == "spread", "unknown supporter payment purpose %r" % (purpose,)
+    return _place_sympathy(state, clearing)
 
 
 def sympathetic_clearings(state: GameState) -> List[int]:
@@ -229,6 +258,22 @@ def outrage_options(state: GameState, dec: OutrageDecision) -> List[Action]:
             out.append(OutragePay(player=dec.actor, card_id=cid))
     if not out:
         out.append(OutragePay(player=dec.actor, card_id=None))
+    return out
+
+
+def supporter_payment_options(state: GameState,
+                              dec: SupporterPaymentDecision) -> List[Action]:
+    """支援者支払いの選択肢(19.2): 一致suit / 鳥のうち払えるもの。
+
+    デシジョンは両方あるときにしか積まれないため通常2択だが、防御的に
+    現在の支援者ボックスから列挙する。
+    """
+    als = state.alliance()
+    out: List[Action] = []
+    if any(state.cards.suit_of(c) == dec.suit for c in als.supporters):
+        out.append(AllianceSpendSupporter(player=ALLIANCE, suit=dec.suit))
+    if any(state.cards.suit_of(c) == Suit.BIRD for c in als.supporters):
+        out.append(AllianceSpendSupporter(player=ALLIANCE, suit=Suit.BIRD))
     return out
 
 
@@ -490,12 +535,31 @@ def _remove_all_enemies(state: GameState, cid: int) -> GameState:
 
 
 def apply_revolt(state: GameState, action: AllianceRevolt, rng) -> GameState:
-    """反乱(8.4.1): 支援者2枚 → 敵全除去 → 拠点 → 兵士 → 指揮官1。"""
+    """反乱(8.4.1): 支援者2枚(19.2 で選択化)→ 解決(_finish_revolt)。"""
     cid = action.clearing
     suit = state.map.clearing(cid).suit
-    pay = _supporter_payment(state, suit, 2)
-    assert pay is not None, "revolt without payable supporters"
-    state = _pay_supporters(state, pay)
+    assert _supporter_payment(state, suit, 2) is not None, \
+        "revolt without payable supporters"
+    return _continue_supporter_payment(state, suit, 2, "revolt", cid, rng)
+
+
+def apply_spend_supporter(state: GameState, action: AllianceSpendSupporter,
+                          rng) -> GameState:
+    """支援者1枚の支払い(19.2)。``SupporterPaymentDecision`` の応答。
+
+    支払い後は _continue_supporter_payment に戻り、再push または完了処理へ。
+    """
+    dec = state.pending[-1]
+    assert isinstance(dec, SupporterPaymentDecision)
+    state = state.pop_pending()
+    state = _pay_one_supporter(state, action.suit)
+    return _continue_supporter_payment(
+        state, dec.suit, dec.remaining - 1, dec.purpose, dec.clearing, rng)
+
+
+def _finish_revolt(state: GameState, cid: int, rng) -> GameState:
+    """反乱の解決(8.4.1): 敵全除去 → 拠点 → 兵士 → 指揮官1(支払い後, 19.2)。"""
+    suit = state.map.clearing(cid).suit
     # 敵配置物の全除去(建物/トークン除去で1VPずつ, 3.2.1)
     state = _remove_all_enemies(state, cid)
     # 拠点タイル配置(動物種はこの広場の suit)
@@ -520,13 +584,13 @@ def apply_revolt(state: GameState, action: AllianceRevolt, rng) -> GameState:
 
 
 def apply_spread(state: GameState, action: AllianceSpreadSympathy, rng) -> GameState:
-    """支持拡大(8.4.2): 支援者(累進+戒厳令)を支払い支持トークン配置+VP。"""
+    """支持拡大(8.4.2): 支援者(累進+戒厳令。19.2 で選択化)→ トークン配置+VP。"""
     cid = action.clearing
     suit = state.map.clearing(cid).suit
-    pay = _supporter_payment(state, suit, _spread_cost(state, cid))
-    assert pay is not None, "spread without payable supporters"
-    state = _pay_supporters(state, pay)
-    return _place_sympathy(state, cid)
+    cost = _spread_cost(state, cid)
+    assert _supporter_payment(state, suit, cost) is not None, \
+        "spread without payable supporters"
+    return _continue_supporter_payment(state, suit, cost, "spread", cid, rng)
 
 
 def apply_mobilize(state: GameState, action: AllianceMobilize, rng) -> GameState:

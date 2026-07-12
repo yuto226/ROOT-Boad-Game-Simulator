@@ -43,7 +43,10 @@ _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "
 
 #: カタログのバージョン。キー空間(catalog.size)が変わる変更のたびに増やす。
 #: ckpt に保存し resume 時の非互換を検出する(14.7。旧 ckpt を無言で壊さない)。
-CATALOG_VERSION = 4
+#: v5(19.4): 支払い選択のデシジョン化で MarquiseChooseWood 12 +
+#: AllianceSpendSupporter 4 + VagabondExhaustItem 8 + VagabondRepairItem 8
+#: = 32 キー追加。
+CATALOG_VERSION = 5
 
 
 # ============================================================
@@ -206,8 +209,12 @@ def action_key(state, action) -> Tuple:
         return (name, action.quest_id, action.reward)
     if name == "VagabondStrike":
         return (name, action.faction, action.target)
-    if name == "VagabondRepair":
+    if name in ("VagabondRepair", "VagabondExhaustItem", "VagabondRepairItem"):
         return (name, action.kind)
+    if name == "MarquiseChooseWood":
+        return (name, action.clearing)
+    if name == "AllianceSpendSupporter":
+        return (name, action.suit)
     if name == "VagabondSpecial":
         base = None if action.card_id is None else state.cards.base_id(action.card_id)
         return (name, action.target, base)
@@ -371,6 +378,17 @@ def _build_keys() -> List[Tuple]:
             add(("UseCraftedEffect", k, f, None))
     for c in CLEARINGS:
         add(("UseCraftedEffect", "tax-collector", None, c))
+    # --- catalog v5(19.4): 支払い選択のデシジョン化 ---
+    # MarquiseChooseWood : (型名, clearing)(19.1)
+    for c in CLEARINGS:
+        add(("MarquiseChooseWood", c))
+    # AllianceSpendSupporter : (型名, suit)(19.2)
+    for s in SUITS:
+        add(("AllianceSpendSupporter", s))
+    # VagabondExhaustItem / VagabondRepairItem : (型名, kind)(19.3)
+    for n in ("VagabondExhaustItem", "VagabondRepairItem"):
+        for k in ITEM_KIND_VALUES:
+            add((n, k))
     return keys
 
 

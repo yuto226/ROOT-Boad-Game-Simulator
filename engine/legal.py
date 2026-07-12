@@ -32,11 +32,15 @@ from .actions import (
     RefreshDecision,
     SetupChooseKeep,
     SetupKeepDecision,
+    SupporterPaymentDecision,
     SupportersLimitDecision,
     TakeDominance,
     VagabondCoalition,
+    VagabondPayItemDecision,
+    VagabondRepairDecision,
     VagabondSetupCharacterDecision,
     VagabondSetupForestDecision,
+    WoodPaymentDecision,
 )
 from .battle import _matching_ambush, allocate_options, battle_effects_options
 from . import crafting as crafting_mod
@@ -183,6 +187,11 @@ def _decision_options(state: GameState) -> List[Action]:
         from .factions import marquise
         return marquise.march_decision_options(state)
 
+    if isinstance(dec, WoodPaymentDecision):
+        # 建設の木材支払い(6.5.4.II, 19.1): 連結支配広場のうち木材のある広場
+        from .factions import marquise
+        return marquise.wood_payment_options(state, dec)
+
     if isinstance(dec, FieldHospitalDecision):
         # 野戦病院(6.2.3): 使わない(None)+ 一致カード各種
         from .factions import marquise
@@ -218,6 +227,11 @@ def _decision_options(state: GameState) -> List[Action]:
         from .factions import alliance
         return alliance.supporters_limit_options(state, dec)
 
+    if isinstance(dec, SupporterPaymentDecision):
+        # 支援者支払いの選択(8.4.1/8.4.2, 19.2): 一致suit / 鳥
+        from .factions import alliance
+        return alliance.supporter_payment_options(state, dec)
+
     if isinstance(dec, VagabondSetupCharacterDecision):
         # キャラクター選択(9.3.1)
         from .factions import vagabond
@@ -242,6 +256,16 @@ def _decision_options(state: GameState) -> List[Action]:
         # 夕闇のアイテム上限調整(9.6.4)
         from .factions import vagabond
         return vagabond.limit_options(state, dec)
+
+    if isinstance(dec, VagabondPayItemDecision):
+        # 援助の任意アイテム支払い(9.5.4, 19.3)
+        from .factions import vagabond
+        return vagabond.pay_item_options(state, dec)
+
+    if isinstance(dec, VagabondRepairDecision):
+        # 隠れ家の3枚選択修理(D.3.2, 19.3)
+        from .factions import vagabond
+        return vagabond.hideout_repair_options(state, dec)
 
     if isinstance(dec, DiscardDecision):
         # 手札を5枚へ(6.6)

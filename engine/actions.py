@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from .types import FactionId
+from .types import FactionId, Suit
 
 
 # ============================================================
@@ -143,6 +143,17 @@ class MarquisePlayBirdCard(Action):
     """鳥カード消費による追加アクション権の獲得(6.5)。"""
 
     card_id: str
+
+
+@dataclass(frozen=True)
+class MarquiseChooseWood(Action):
+    """建設の木材支払い1個の広場選択(6.5.4.II, 19.1)。
+
+    ``WoodPaymentDecision`` の応答。候補=建設広場から連結の支配下広場の
+    うち木材が1個以上ある広場。
+    """
+
+    clearing: int
 
 
 # --- デシジョン応答アクション ---
@@ -331,6 +342,17 @@ class AllianceDiscardSupporter(Action):
     card_id: str
 
 
+@dataclass(frozen=True)
+class AllianceSpendSupporter(Action):
+    """支援者1枚の支払い(8.4.1 / 8.4.2, 19.2)。``SupporterPaymentDecision`` の応答。
+
+    ``suit`` は実際に払うカードの suit(一致suit or BIRD)。同 suit 内の
+    どのカードを払うかは決定的(supporters タプルの先頭一致)=自動のまま。
+    """
+
+    suit: Suit
+
+
 # --- 放浪部族固有(第9章) ---
 @dataclass(frozen=True)
 class VagabondChooseCharacter(Action):
@@ -419,6 +441,29 @@ class VagabondSpecial(Action):
 
     target: Optional[FactionId] = None
     card_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VagabondExhaustItem(Action):
+    """援助(9.5.4)の「任意のアイテム1枚を使用」の種類選択(19.3)。
+
+    ``VagabondPayItemDecision`` の応答。kind=ItemKind 8種。候補=未使用・
+    非損傷のアイテム種。同 kind 内はかばんエリア優先で自動(配置枠の T/X/B は
+    使うとかばんへ移動し回復ボーナス 9.4.1 等を失うため、かばん優先が弱支配)。
+    """
+
+    kind: str
+
+
+@dataclass(frozen=True)
+class VagabondRepairItem(Action):
+    """隠れ家(D.3.2)の「3枚まで修理」の1枚選択(19.3)。
+
+    ``VagabondRepairDecision`` の応答。kind=ItemKind 8種。同 kind 内は
+    表向き優先で自動(修理は裏表を変えないため、表向きを直す方が弱支配)。
+    """
+
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -532,6 +577,21 @@ class MarquiseMarchDecision(Decision):
 
 
 @dataclass(frozen=True)
+class WoodPaymentDecision(Decision):
+    """建設の木材支払い(6.5.4.II, 19.1)。actor=猫。
+
+    remaining(=残コスト)個の木材を1個ずつ ``MarquiseChooseWood`` で選ぶ。
+    remaining==0 になったら建設を完了する(build_clearing / build_kind は
+    完了処理への接続用)。支配は兵士+建物で決まり木材(トークン)除去では
+    変わらないため、支払い途中で候補広場の連結・支配条件は変化しない。
+    """
+
+    remaining: int = 0
+    build_clearing: int = 0
+    build_kind: str = ""
+
+
+@dataclass(frozen=True)
 class FieldHospitalDecision(Decision):
     """野戦病院(6.2.3)。actor=猫。除去された猫兵士 count 個を城砦広場へ
     戻すか(一致カード消費)否かを選ぶ。
@@ -598,6 +658,22 @@ class SupportersLimitDecision(Decision):
     """全拠点喪失時の支援者ボックス5枚調整(8.2.4)。actor=森林連合。"""
 
 
+@dataclass(frozen=True)
+class SupporterPaymentDecision(Decision):
+    """支援者支払いの選択(8.4.1 / 8.4.2, 19.2)。actor=森林連合。
+
+    支援者ボックスに一致 suit と鳥の両方があるときだけ積まれる(片方のみ
+    なら自動支払い)。応答は ``AllianceSpendSupporter``。支払い1枚ごとに
+    再push する。purpose / clearing は支払い完了後の処理(反乱の解決 or
+    支持トークン配置)への接続用。
+    """
+
+    suit: Suit = None
+    remaining: int = 0
+    purpose: str = ""   # "revolt" | "spread"
+    clearing: int = 0
+
+
 # --- 放浪部族(第9章) ---
 @dataclass(frozen=True)
 class VagabondSetupCharacterDecision(Decision):
@@ -632,3 +708,32 @@ class ItemDamageDecision(Decision):
 @dataclass(frozen=True)
 class ItemLimitDecision(Decision):
     """夕闇のアイテム上限調整(9.6.4)。上限超過の間1枚ずつゲームから除外。"""
+
+
+@dataclass(frozen=True)
+class VagabondPayItemDecision(Decision):
+    """援助(9.5.4)の「任意のアイテム1枚を使用」の選択(19.3)。actor=部族。
+
+    支払える種類が複数あるときだけ積まれる(1種のみなら自動)。応答は
+    ``VagabondExhaustItem``。remaining は常に1(観測用, 19.4)。
+    aid_faction / aid_card_id / aid_take_item は支払い後に援助本体
+    (カード譲渡・アイテム取得・関係処理)を続行するための接続用。
+    支払いは取得より先(9.5.4)なので、取得アイテムは支払い候補に入らない。
+    """
+
+    remaining: int = 1
+    aid_faction: FactionId = None
+    aid_card_id: str = ""
+    aid_take_item: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VagabondRepairDecision(Decision):
+    """隠れ家(D.3.2)の「3枚まで修理」の選択(19.3)。actor=部族。
+
+    損傷アイテムが4枚以上のときだけ積まれる(3枚以下なら全修理=自動)。
+    応答は ``VagabondRepairItem``。1枚ごとに再push し、損傷が尽きるか
+    remaining==0 で終了して隠れ家の後続処理(夕闇直行)へ進む。
+    """
+
+    remaining: int = 0
