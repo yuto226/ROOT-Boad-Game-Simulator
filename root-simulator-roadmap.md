@@ -78,6 +78,7 @@
 > - **リーグ戦実装済み(2026-07-11、DESIGN.md 16章)**: `rl/league.py`(OpponentPool)+ppo/train拡張。`--league-prob`(既定0.5、0で従来の純self-play)/`--league-pool-max`(既定20)/`--league-snapshot-every`(既定20更新)。log.csvに league_episodes/league_winrate 列が増えた(旧runのlog.csvとは列非互換)。winrate_seat0/1 は self-playエピソードのみの集計。スナップショットは `rl_runs/<run>/league/snap_*.pt`(間引き時はファイルも削除)、resume時はckptの league_meta から再構築(欠損はwarn+skip)。league有効時のスループットは約4〜5割低下(凍結ネット推論の分)
 > - 次の作業: GPU学習(6bの残り=clone+build+ジョブ投入 → 10⁷ステップをリーグ戦有効で回す)
 > - **v4 10⁷run(gpu-10m)の分析結果(2026-07-12、610万stepで中断)**: vs Random はほぼ卒業。vs Heuristic は猫席92〜100%、**鷲巣席は update 1420 前後(勝率0.33、瞬間0.56)をピークに 0.17 へ退化**。self-play が猫92%と一方的で鷲巣の学習分布が崩壊。KL≈0.039/clipfrac≈0.28 と更新強すぎ(lr低減 or target-KL 検討)。鷲巣ベストckptは `gpu-10m/ckpt_1420.pt`(Windows機に全ckpt 10刻みで残存)。最終世代でも1ゲーム内乱4〜7回・建設欄空が6割=「勅令極小化で内乱を安くする」局所解に収束
+> - **シェイピング効果確認(2026-07-12深夜、gpu-v5-shaped=ckpt_3050からresume+vp0.01/build0.2、12M目標)**: 同一update帯でvs heuristic鷲勝率が中盤0.70/直近0.62(baseline 0.56/0.47)と**+15pt**、後半退化を抑制。移動平均ピーク0.812@upd3870(v5新記録)。行動面は内乱10.4→5.6回/ゲームに半減・勅令2.8→3.1枚。締めの完走後評価と対戦用ベストckpt選定(3870付近)が次の小タスク
 > - **報酬シェイピング実装済み(2026-07-12、DESIGN.md 12.7、d8e636f)**: ①PPOの途中報酬回収(従来は途中報酬を読み捨てて終局±1のみだった。意思決定点間の `_cumulative_rewards` 差分で回収)②`--vp-shaping`(VP増分×係数、目安0.01)③`--build-shaping`(鷲巣建設欄のpotential-basedシェイピング、φ=鳥0枚→−1/鳥1枚→+1/鳥2枚以上→0、非鳥−0.5/枚。方策不変・終局ゼロ化。目安0.2)。いずれも既定0=従来と数値互換。obs/catalog不変なので **catalog v5 ckptとresume互換**(進行中の gpu-10m-v5 に `--resume` で途中適用可能)
 
 ---
