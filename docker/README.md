@@ -30,9 +30,35 @@ docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
   自動起動(WSL2はsystemd有効化: `/etc/wsl.conf` に `[boot] systemd=true`)。
 - どちらでも Tailscale の MagicDNS 名で Mac から直接届く(LAN外でも可)。
 
-## 3. リポジトリ取得と学習ジョブ
+## 3. リポジトリ取得と学習ジョブ(案A: Windows側から直接駆動。2026-07-12確定)
 
-WSL2のUbuntu内:
+**WSLのUbuntuディストリは使わない**(docker CLI注入がSSH非対話セッションで壊れる
+問題を回避。5章参照)。リポジトリは Windows 側 `C:\root-sim`、docker は Windows の
+docker.exe を SSH(cmd.exe)から直接叩く。コンテナ自体は Docker Desktop が内部の
+WSL2 VM(docker-desktop)で動かすが、こちらから触ることはない。
+
+### 一度だけの準備(2026-07-12 実施済み。壊れたら再作成)
+
+SSHセッションには資格情報マネージャ用のログオンセッションがなく、Windows の
+docker CLI は credsStore 未指定だと wincred を**自動検出**して即死する
+(config.json の credsStore 削除・docker logout・auths 空化では直らない。実験済み)。
+「資格情報なし」と正しく応答する noop ヘルパを専用 DOCKER_CONFIG に置いて回避:
+
+```bat
+mkdir C:\dockercfg\bin
+(echo @echo off& echo echo credentials not found in native keychain& echo exit /b 1) > C:\dockercfg\bin\docker-credential-noop.bat
+echo {"credsStore": "noop"} > C:\dockercfg\config.json
+git clone https://github.com/yuto226/ROOT-Boad-Game-Simulator.git C:\root-sim
+```
+
+### 日常運用(MacからSSH。cmd.exe着地なのでWindowsコマンドをそのまま)
+
+毎コマンド共通プリフィクス: `set PATH=%PATH%;C:\dockercfg\bin&& set DOCKER_CONFIG=C:\dockercfg&& `
+
+実測(2026-07-12 案Aスモーク): device=cuda、純self-playで**約4700〜5200 steps/s**
+(WSL経由時の約2倍)。旧WSLクローンの rl_runs/gpu-calib にキャリブ結果が残存。
+
+以下は旧WSL方式のコマンド例(参考。案Aでは C:\root-sim パスで同じ compose を叩く):
 
 ```bash
 git clone git@github.com:yuto226/ROOT-Boad-Game-Simulator.git root-sim
@@ -65,6 +91,11 @@ docker compose -f docker/compose.yaml run -d train \
 
 ## 5. トラブルシューティング(2026-07-11 実機セットアップで確認)
 
+- **(案Aで解消)WSLのdocker CLI注入がSSH非対話セッションで消える**: Ubuntu への
+  docker 注入は Docker Desktop 起動直後しか効かず、アイドルでディストリが落ちる
+  たびに再発(2026-07-12確認)。案A移行の直接の理由。
+- **Windows側CLIの `error getting credentials`(logon session does not exist)**:
+  3章の noop ヘルパ+専用 DOCKER_CONFIG で解決。
 - **MacからのSSHリモート実行**: 着地シェルはcmd.exeなので、WSL内コマンドは
   `ssh <user>@<tailscale名> "wsl -d Ubuntu -e bash -lc \"<cmd>\""` の形にする
   (内側は**ダブルクォート**。シングルクォートはcmd.exeが解釈せずbashに届かない)。
