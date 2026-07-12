@@ -88,7 +88,7 @@
   `tools/record_game.py`(対局→JSON。policy指定 random/heuristic/nn:<ckpt>[:sample])+
   `ui/viewer.html`(自己完結単一HTML。file://で開き game.json を読み込む)。
   使い方例: `python3 -m tools.record_game --factions marquise,eyrie --policies nn:rl_runs/gpu-10m/ckpt_400.pt,heuristic --seed 0 -o ui/game.json` → `open ui/viewer.html`
-- [x] FastAPI等でエンジンをAPI化 — ✅ 観戦API完了(2026-07-12、DESIGN.md 20章)。`server/`(GET /api/models、POST /api/games=都度生成、nn:はckptロードをLRUキャッシュ)。起動: `.venv/bin/uvicorn server.app:app --reload --port 8000`(要 `pip install -e ".[server]"`)。フロントはVite+React SPAで次セッション実装予定(CORS 5173許可済み)。対人戦のstep APIは未実装(server/games.py に拡張点コメント)
+- [x] FastAPI等でエンジンをAPI化 — ✅ 観戦API完了(2026-07-12、DESIGN.md 20章)。`server/`(GET /api/models、POST /api/games=都度生成、nn:はckptロードをLRUキャッシュ)。起動: `.venv/bin/uvicorn server.app:app --reload --port 8000`(要 `pip install -e ".[server]"`)。フロントは `web/`(Vite+React+TS)実装済み(2026-07-12、DESIGN.md 20.x章): `cd web && npm install && npm run dev` → http://localhost:5173(devプロキシで/api→8000)。対人戦のstep APIは未実装(server/games.py に拡張点コメント)
 - [ ] (任意)人間 vs CPU対戦モード
 
 ---
