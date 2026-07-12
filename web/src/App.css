@@ -1,0 +1,219 @@
+/* App のレイアウト・コンポーネント固有スタイル。ベース配色は index.css。 */
+
+.app-header {
+  padding: 10px 16px;
+  background: #2a2117;
+  color: #f3ede1;
+}
+.app-header h1 {
+  font-size: 1.1rem;
+}
+
+.app-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+}
+
+/* 左ペイン: 対局生成 */
+.left-pane {
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.generate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.faction-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.faction-row select:first-child {
+  flex: 0 0 84px;
+}
+.faction-row select:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sample-check {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.row-remove {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid #d8cdb2;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #6b5f47;
+  width: 24px;
+  height: 24px;
+}
+.row-remove:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.seed-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.seed-row input {
+  width: 100px;
+}
+
+.generate-btn {
+  background: #2a2117;
+  color: #f3ede1;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.generate-btn:hover:not(:disabled) {
+  background: #4a3f2a;
+}
+.generate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error-text {
+  color: #b3261e;
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.game-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.game-item {
+  width: 100%;
+  text-align: left;
+  background: #fffaf0;
+  border: 1px solid #d8cdb2;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.game-item:hover {
+  background: #efe6d0;
+}
+.game-item.active {
+  border-color: #2a2117;
+  background: #efe6d0;
+}
+.game-item-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.game-item-meta {
+  font-size: 0.75rem;
+  color: #6b5f47;
+}
+
+/* 右ペイン: ビューア */
+.right-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.right-pane-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.board-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #fffaf0;
+  border: 1px solid #d8cdb2;
+  border-radius: 8px;
+  padding: 8px;
+}
+#board-svg {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 820 / 650;
+  display: block;
+}
+
+.side-panels {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.viewer-empty {
+  flex: 1 1 auto;
+  margin: 60px auto;
+  max-width: 480px;
+  text-align: center;
+  color: #6b5f47;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+footer {
+  position: sticky;
+  bottom: 0;
+  background: #2a2117;
+  color: #f3ede1;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-radius: 8px;
+}
+footer button {
+  background: #4a3f2a;
+  color: #f3ede1;
+  border: 1px solid #6b5f47;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+footer button:hover {
+  background: #5a4d33;
+}
+#step-slider {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+#step-label {
+  font-size: 0.8rem;
+  min-width: 70px;
+  text-align: right;
+}
