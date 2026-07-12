@@ -4,6 +4,7 @@ numpy 未導入環境では skip する(env/encoder は numpy 必須, 12.1)。
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import random
 import subprocess
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.skipif(not _HAVE_NUMPY, reason="numpy 未導入(rl は 
 from engine.apply import apply
 from engine.game import begin_first_turn, new_game
 from engine.legal import legal_actions
-from engine.types import FactionId
+from engine.types import LOYAL_VIZIER, FactionId
 
 from rl.catalog import ActionCatalog, action_for, action_key, legal_mask
 
@@ -170,3 +171,110 @@ def test_env_episode_completes():
             assert env.rewards[fid.value] == expected
         # 合計 = +1 + (-1)*(F-1)
         assert abs(sum(env.rewards.values()) - (1.0 - (len(_FACTIONS) - 1))) < 1e-9
+
+
+# ============================================================
+# 12.7 build_column_potential 単体テスト
+# ============================================================
+def _with_build_column(state, cards):
+    """建設列(勅令4列目, decree[COL_BUILD])を指定カード列に差し替えた state を返す。"""
+    from engine.factions.eyrie import COL_BUILD
+
+    es = state.eyrie()
+    decree = list(es.decree)
+    decree[COL_BUILD] = tuple(cards)
+    es2 = dataclasses.replace(es, decree=tuple(decree))
+    return state.with_faction_state(es2)
+
+
+def test_build_column_potential_table():
+    from rl.env import build_column_potential
+
+    rng = random.Random(0)
+    state = new_game(_FACTIONS, rng)
+    BIRD = "armorers#1"        # Suit.BIRD
+    MOUSE = "codebreakers#1"   # Suit.MOUSE(非鳥)
+
+    # (カード列, 期待 φ) = (base(b) - 0.5*n)
+    cases = [
+        ((), -1.0),                      # b=0, n=0
+        ((BIRD,), 1.0),                  # b=1, n=0
+        ((BIRD, BIRD), 0.0),             # b=2, n=0
+        ((BIRD, MOUSE), 0.5),            # b=1, n=1
+        ((MOUSE, MOUSE), -2.0),          # b=0, n=2
+        ((LOYAL_VIZIER, MOUSE), 0.5),    # 忠臣は鳥扱い(7.3.4): b=1, n=1
+    ]
+    for cards, expected in cases:
+        s = _with_build_column(state, cards)
+        assert build_column_potential(s) == pytest.approx(expected), cards
+
+
+def test_build_column_potential_no_eyrie():
+    from rl.env import build_column_potential
+
+    rng = random.Random(0)
+    state = new_game((FactionId.MARQUISE, FactionId.ALLIANCE), rng)
+    assert build_column_potential(state) == 0.0
+
+
+# ============================================================
+# 12.7 テレスコープ検証: 累積 shaping = -φ(初期状態)、終局で ±1(0)加算
+# ============================================================
+def test_build_shaping_telescopes_to_negative_initial_potential():
+    from rl.env import RootEnv
+
+    factions = (FactionId.MARQUISE, FactionId.EYRIE)
+    for seed in (11, 12, 13):
+        env = RootEnv(factions, max_turns=200, auto_single=True, seed=seed,
+                      build_shaping=1.0)
+        phi0 = env._build_phi_prev  # reset 時に記録した φ(s0)(12.7)
+        sampler = random.Random(seed + 900)
+        steps = 0
+        while env.agents and steps < 200000:
+            obs = env.observe(env.agent_selection)
+            legal_idx = np.nonzero(obs["action_mask"])[0]
+            if len(legal_idx) == 0:
+                break
+            env.step(int(sampler.choice(list(legal_idx))))
+            steps += 1
+        assert env._done
+
+        winner = env.infos[FactionId.MARQUISE.value].get("winner")
+        if winner is None:
+            outcome = 0.0  # タイムアウト
+        else:
+            outcome = 1.0 if winner == FactionId.EYRIE.value else -1.0
+        got = env._cumulative_rewards[FactionId.EYRIE.value] - outcome
+        assert got == pytest.approx(-phi0), (seed, got, phi0)
+
+
+# ============================================================
+# 12.7 互換性検証: shaping 全 0 なら従来どおり env.rewards は
+# 途中 0・終局のみ ±1(タイムアウト0)
+# ============================================================
+def test_shaping_disabled_matches_legacy_reward_pattern():
+    from rl.env import RootEnv
+
+    for seed in (21, 22, 23):
+        env = RootEnv(_FACTIONS, max_turns=150, auto_single=True, seed=seed)
+        sampler = random.Random(seed + 700)
+        steps = 0
+        while env.agents and steps < 200000:
+            obs = env.observe(env.agent_selection)
+            legal_idx = np.nonzero(obs["action_mask"])[0]
+            if len(legal_idx) == 0:
+                break
+            env.step(int(sampler.choice(list(legal_idx))))
+            steps += 1
+            if not env._done:
+                # 途中ステップは全 agent の reward が 0(shaping 無効時, 12.7)
+                assert all(v == 0.0 for v in env.rewards.values())
+        assert env._done
+        terminated = any(env.terminations.values())
+        truncated = any(env.truncations.values())
+        if terminated and not truncated:
+            for fid in _FACTIONS:
+                expected = 1.0 if env.infos[_FACTIONS[0].value]["winner"] == fid.value else -1.0
+                assert env.rewards[fid.value] == expected
+        else:
+            assert all(v == 0.0 for v in env.rewards.values())

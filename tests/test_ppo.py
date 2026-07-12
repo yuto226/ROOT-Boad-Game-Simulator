@@ -132,3 +132,74 @@ def test_nnpolicy_returns_legal_actions():
                 action = acts[0]
             state = apply(state, action, rng)
         assert decisions >= 1, "10 手に届く前に終局/停止(greedy=%s)" % greedy
+
+
+# ============================================================
+# 12.7 PPO の意思決定点間シェイピング回収の検証
+# ============================================================
+def _drive_episode_reward_collection(env, action_seed):
+    """RootEnv 1 エピソードを _Worker/_collect_shaped_reward 経由で回し、
+    エピソード完走後の各 agent の tr.reward 列を返す(12.7)。
+
+    collect() が行う「新しい意思決定点の直前に直近との累積報酬差分を1つ前の
+    遷移へ書き込む」ロジックをそのまま踏襲する(NN 推論は使わず行動はランダム)。
+    """
+    from rl.ppo import _Worker, _collect_shaped_reward
+
+    w = _Worker(env)
+    rng = random.Random(action_seed)
+    guard = 0
+    while env.agents and guard < 200000:
+        guard += 1
+        actor = env.agent_selection
+        obs = env.observe(actor)
+        legal_idx = [i for i, ok in enumerate(obs["action_mask"]) if ok]
+        if not legal_idx:
+            break
+        tr = w.traj[actor]
+        r = _collect_shaped_reward(w, actor)
+        if len(tr) > 0:
+            tr.reward[-1] = r
+        tr.add(obs["observation"], obs["action_mask"], 0, 0.0, 0.0)
+        w.ep_steps += 1
+        env.step(int(rng.choice(legal_idx)))
+        if env._done:
+            for a in w.agents:
+                t = w.traj[a]
+                if len(t) == 0:
+                    continue
+                t.reward[-1] = _collect_shaped_reward(w, a)
+            break
+    assert env._done, "guard 上限に達した(想定外)"
+    return {a: list(w.traj[a].reward) for a in w.agents}
+
+
+def test_worker_reward_recovery_matches_legacy_when_shaping_disabled():
+    """互換性検証: shaping 全 0 なら PPO の途中 reward は全 0、終局のみ ±1(0)。"""
+    from rl.env import RootEnv
+
+    factions = (FactionId.MARQUISE, FactionId.EYRIE)
+    for seed in (201, 202, 203):
+        env = RootEnv(factions, max_turns=80, auto_single=True, seed=seed)
+        rewards = _drive_episode_reward_collection(env, action_seed=seed + 500)
+        for a, rs in rewards.items():
+            if not rs:
+                continue
+            assert all(x == 0.0 for x in rs[:-1]), (seed, a, rs)
+            assert rs[-1] in (-1.0, 0.0, 1.0), (seed, a, rs)
+
+
+def test_worker_reward_recovery_captures_midepisode_shaping():
+    """vp_shaping>0 なら _Trajectory の途中 reward に非ゼロが現れる(12.7)。"""
+    from rl.env import RootEnv
+
+    factions = (FactionId.MARQUISE, FactionId.EYRIE)
+    found_nonzero_mid = False
+    for seed in (301, 302, 303, 304, 305):
+        env = RootEnv(factions, max_turns=80, auto_single=True, seed=seed,
+                      vp_shaping=0.05)
+        rewards = _drive_episode_reward_collection(env, action_seed=seed + 500)
+        for rs in rewards.values():
+            if any(x != 0.0 for x in rs[:-1]):
+                found_nonzero_mid = True
+    assert found_nonzero_mid, "vp_shaping>0 でも途中 reward が全部 0 のままだった"
