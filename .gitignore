@@ -25,3 +25,7 @@ ui/json
 
 # pip install -e のビルド成果物
 *.egg-info/
+
+# 観戦フロントエンド(web/)のnpm依存・ビルド成果物
+web/node_modules/
+web/dist/
