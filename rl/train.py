@@ -74,6 +74,7 @@ def _save_ckpt(path: str, trainer: PPOTrainer, update: int,
             "vf_coef": cfg.vf_coef, "ent_coef": cfg.ent_coef,
             "max_grad_norm": cfg.max_grad_norm, "max_turns": cfg.max_turns,
             "seed": cfg.seed, "league_prob": cfg.league_prob,
+            "vp_shaping": cfg.vp_shaping, "build_shaping": cfg.build_shaping,
         },
     }, path)
 
@@ -96,6 +97,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--max-turns", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--vp-shaping", type=float, default=0.0,
+                         help="自派閥 VP 増分×係数を毎 step 加算(0=無効。目安 0.01 前後。"
+                              "勝敗 ±1 を食わないスケールで, 12.4/12.7)")
+    parser.add_argument("--build-shaping", type=float, default=0.0,
+                         help="EYRIE 建設欄(勅令4列目)のポテンシャルベースシェイピング係数"
+                              "(0=無効。目安 0.2 前後。勝敗 ±1 を食わないスケールで, 12.7)")
     parser.add_argument("--league-prob", type=float, default=0.5,
                          help="対戦相手を過去世代の凍結ネットに差し替える確率"
                               "(0=無効=純 self-play, 16.5)")
@@ -135,6 +142,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         lr=args.lr, vf_coef=args.vf_coef, ent_coef=args.ent_coef,
         max_grad_norm=args.max_grad_norm, max_turns=args.max_turns, seed=args.seed,
         league_prob=args.league_prob,
+        vp_shaping=args.vp_shaping, build_shaping=args.build_shaping,
     )
     pool = OpponentPool(run_dir, pool_max=args.league_pool_max)
     trainer = PPOTrainer(net, optimizer, cfg, device, pool=pool)

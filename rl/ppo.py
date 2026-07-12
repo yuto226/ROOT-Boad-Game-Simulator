@@ -49,16 +49,22 @@ class PPOConfig:
     max_turns: int = 300
     seed: int = 0                      # env seed 系列と torch rng の基点
     league_prob: float = 0.0           # 過去世代凍結ネットに差し替える確率(0=無効, 16.5)
+    vp_shaping: float = 0.0            # 自派閥 VP 増分×係数を毎 step 加算(0=無効, 12.4/12.7)
+    build_shaping: float = 0.0         # EYRIE 建設欄ポテンシャルシェイピング係数(0=無効, 12.7)
 
 
 # ------------------------------------------------------------
 # トラジェクトリ(env×agent 別。1エピソードでの自分の意思決定点の列)
 # ------------------------------------------------------------
 class _Trajectory:
-    """1エピソード・1 agent 分の遷移列(13.3)。
+    """1エピソード・1 agent 分の遷移列(13.3, 12.7)。
 
-    obs/mask/action/logp/value を意思決定点順に貯め、報酬は途中 0・終局時に
-    最後の遷移へ ±1 を書き込む。切れた列は ``bootstrap`` に value を持つ。
+    obs/mask/action/logp/value を意思決定点順に貯め、reward は追加時 0.0 で
+    埋めておき、次の自分の意思決定点(または終局)で `_cumulative_rewards` の
+    差分を1つ前の遷移へ書き込む(意思決定点間シェイピング回収, 12.7)。
+    shaping が全て 0 のときは途中差分が常に 0 になり、終局差分が ±1(タイム
+    アウト 0)のみになるため、従来(途中 0・終局のみ書き込み)と数値一致する。
+    切れた列は ``bootstrap`` に value を持つ。
     """
 
     __slots__ = ("obs", "mask", "action", "logp", "value",
@@ -152,6 +158,9 @@ class _Worker:
         self.agents: Tuple[str, ...] = tuple(env.possible_agents)
         self.traj: Dict[str, _Trajectory] = {a: _Trajectory() for a in self.agents}
         self.ep_steps: int = 0  # 現エピソードの意思決定点数(両席合算。学習・league 両方カウント, 16.3)
+        # agent 別「直近の意思決定点時点での env._cumulative_rewards」(12.7)。
+        # 次の意思決定点(または終局)でこの値との差分を1つ前の遷移へ書き込む。
+        self.last_cum: Dict[str, float] = {a: 0.0 for a in self.agents}
         # league 対戦相手(16.3): None=純 self-play。非 None=(agent名, 凍結net, snapshot_id)。
         # 凍結側の意思決定点は traj に追加しない(バッファに入れない)。
         self.opponent: Optional[Tuple[str, ActorCritic, int]] = None
@@ -159,6 +168,20 @@ class _Worker:
     def reset_episode(self) -> None:
         self.traj = {a: _Trajectory() for a in self.agents}
         self.ep_steps = 0
+        self.last_cum = {a: 0.0 for a in self.agents}
+
+
+def _collect_shaped_reward(w: "_Worker", agent: str) -> float:
+    """agent の直近の意思決定点からの累積報酬差分を取り出す(12.7, 13.3)。
+
+    ``env._cumulative_rewards[agent]``(毎 step 加算, 12.4)と ``w.last_cum[agent]``
+    (前回この関数を呼んだ時点の値)の差分を返し、``last_cum`` を更新する。
+    shaping が全て 0 なら途中差分は常に 0、終局差分は ±1(タイムアウト 0)のみになる。
+    """
+    cum = w.env._cumulative_rewards[agent]
+    r = cum - w.last_cum[agent]
+    w.last_cum[agent] = cum
+    return r
 
 
 class PPOTrainer:
@@ -180,7 +203,10 @@ class PPOTrainer:
         self._next_seed = config.seed * 1_000_003 + 1
         self.workers: List[_Worker] = [
             _Worker(RootEnv(config.factions, max_turns=config.max_turns,
-                            auto_single=True, seed=self._alloc_seed()))
+                            auto_single=True, seed=self._alloc_seed(),
+                            vp_shaping=config.vp_shaping,
+                            build_shaping=config.build_shaping,
+                            shaping_gamma=config.gamma))
             for _ in range(config.num_envs)
         ]
         self._seat_of: Dict[str, int] = {
@@ -256,8 +282,15 @@ class PPOTrainer:
                 for k, i in enumerate(learner_idx):
                     w = self.workers[i]
                     actor = actors[i]
-                    w.traj[actor].add(obs_batch[k], mask_batch[k], int(a_np[k]),
-                                      float(logp_np[k]), float(value_np[k]))
+                    tr = w.traj[actor]
+                    # 新しい意思決定点を作る直前に、直近の意思決定点からの累積報酬
+                    # 差分を1つ前の遷移へ書き込む(12.7)。列の先頭(len==0)なら
+                    # 書き込み先がないので last_cum のベースライン更新のみ。
+                    r = _collect_shaped_reward(w, actor)
+                    if len(tr) > 0:
+                        tr.reward[-1] = r
+                    tr.add(obs_batch[k], mask_batch[k], int(a_np[k]),
+                           float(logp_np[k]), float(value_np[k]))
                     w.ep_steps += 1
                     actions[i] = int(a_np[k])
                     steps += 1  # 学習ネットの意思決定点のみ進める(16.3)
@@ -334,7 +367,10 @@ class PPOTrainer:
             tr = w.traj[a]
             if len(tr) == 0:
                 continue
-            tr.reward[-1] = float(env.rewards[a])  # 終局時 ±1(タイムアウト0, 12.4)
+            # 最後の意思決定点以降の残額(終局 ±1/タイムアウト0 + 遅れて発生した
+            # shaping)を累積報酬差分で回収する(12.7)。shaping が全て 0 のときは
+            # ±1(タイムアウト0)のみになり、従来の `float(env.rewards[a])` と一致する。
+            tr.reward[-1] = _collect_shaped_reward(w, a)
             tr.done = True
             completed.append(tr)
 

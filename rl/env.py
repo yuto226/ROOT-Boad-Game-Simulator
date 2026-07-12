@@ -10,6 +10,8 @@ agent_selection/rewards/terminations/truncations/infos)と同名・同義の
   (エピソード長の短縮。run_game のターン数とは一致しなくなる — 仕様)。
 - 報酬: 終局時に勝者 +1・他 -1、タイムアウト(max_turns 超過)は全員 0、途中 0。
   ``vp_shaping>0`` なら自派閥 VP 増分×係数を毎 step 加算(6c で使うかは未定)。
+  ``build_shaping>0`` なら EYRIE の建設欄(勅令4列目)にポテンシャルベース
+  シェイピングを加算する(方策不変・終局でゼロ化、12.7)。
 - 乱数: reset で ``random.Random(seed)`` を1つ作り new_game / apply に注入
   (決定性 10.2。同一 seed+同一行動列で軌跡完全一致)。
 """
@@ -21,12 +23,36 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from engine.apply import apply
+from engine.factions.eyrie import COL_BUILD, card_suit
 from engine.game import begin_first_turn, new_game
 from engine.legal import legal_actions
-from engine.types import FactionId
+from engine.state import GameState
+from engine.types import FactionId, Suit
 
 from .catalog import ActionCatalog, action_for, action_key, legal_mask
 from .encoder import ObservationSpec
+
+
+def build_column_potential(state: GameState) -> float:
+    """建設列(勅令4列目)のポテンシャル φ(s)(DESIGN.md 12.7)。
+
+    建設列(decree[COL_BUILD])の鳥カード枚数 b・非鳥枚数 n を数え、
+    φ = base(b) − 0.5·n(base: b==0→−1.0, b==1→+1.0, b>=2→0.0)。
+    忠臣カード(LOYAL_VIZIER)は鳥として数える(7.3.4, card_suit 参照)。
+    EYRIE が対戦にいない場合は 0.0(このシェイピングは EYRIE 専用)。
+    """
+    if FactionId.EYRIE not in state.factions:
+        return 0.0
+    column = state.eyrie().decree[COL_BUILD]
+    b = sum(1 for card_id in column if card_suit(state, card_id) == Suit.BIRD)
+    n = len(column) - b
+    if b == 0:
+        base = -1.0
+    elif b == 1:
+        base = 1.0
+    else:
+        base = 0.0
+    return base - 0.5 * n
 
 
 class RootEnv:
@@ -34,11 +60,14 @@ class RootEnv:
 
     def __init__(self, factions: Tuple[FactionId, ...], max_turns: int = 300,
                  auto_single: bool = True, seed: Optional[int] = None,
-                 vp_shaping: float = 0.0) -> None:
+                 vp_shaping: float = 0.0, build_shaping: float = 0.0,
+                 shaping_gamma: float = 1.0) -> None:
         self.factions: Tuple[FactionId, ...] = tuple(factions)
         self.max_turns = max_turns
         self.auto_single = auto_single
         self.vp_shaping = vp_shaping
+        self.build_shaping = build_shaping
+        self.shaping_gamma = shaping_gamma
         self.catalog = ActionCatalog()
         self.spec = ObservationSpec(self.factions)
         self.obs_dim = self.spec.obs_dim
@@ -65,6 +94,10 @@ class RootEnv:
         self.infos: Dict[str, Dict] = {a: {} for a in self.possible_agents}
         self._prev_vp: Dict[FactionId, int] = {
             fid: self.state.fs(fid).vp for fid in self.factions}
+        if self.build_shaping and FactionId.EYRIE in self.factions:
+            self._build_phi_prev = build_column_potential(self.state)
+        else:
+            self._build_phi_prev = 0.0
         self._advance()
         self.agent_selection: str = (
             self.state.to_act().value if not self._done else self.possible_agents[0])
@@ -135,7 +168,11 @@ class RootEnv:
 
     # ------------------------------------------------------------
     def _update_rewards(self, actor: FactionId) -> None:
-        """step 後の報酬・終了フラグ・infos を更新する(12.4)。"""
+        """step 後の報酬・終了フラグ・infos を更新する(12.4, 12.7)。
+
+        ``_cumulative_rewards`` は途中の shaping 分も含めて毎 step 加算する
+        (PPO 側が意思決定点間の差分で途中報酬を回収するため、13.3)。
+        """
         self.rewards = {a: 0.0 for a in self.possible_agents}
         if self.vp_shaping:
             delta = self.state.fs(actor).vp - self._prev_vp[actor]
@@ -143,25 +180,36 @@ class RootEnv:
         for fid in self.factions:
             self._prev_vp[fid] = self.state.fs(fid).vp
 
-        if not self._done:
-            return
+        if self.build_shaping and FactionId.EYRIE in self.factions:
+            # 建設欄ポテンシャルベースシェイピング(potential-based, 方策不変, 12.7)。
+            phi_new = build_column_potential(self.state)
+            self.rewards[FactionId.EYRIE.value] += self.build_shaping * (
+                self.shaping_gamma * phi_new - self._build_phi_prev)
+            self._build_phi_prev = phi_new
 
-        terminated = bool(self.state.finished)
-        timed_out = not terminated  # max_turns 超過(勝者なし)
-        winner = self.state.winner
-        for fid in self.factions:
-            a = fid.value
-            self.terminations[a] = terminated
-            self.truncations[a] = timed_out
-        if terminated and winner is not None:
+        if self._done:
+            terminated = bool(self.state.finished)
+            timed_out = not terminated  # max_turns 超過(勝者なし)
+            winner = self.state.winner
             for fid in self.factions:
-                self.rewards[fid.value] += 1.0 if fid == winner else -1.0
-        # timed_out は全員 0(初期化のまま)
+                a = fid.value
+                self.terminations[a] = terminated
+                self.truncations[a] = timed_out
+            if terminated and winner is not None:
+                for fid in self.factions:
+                    self.rewards[fid.value] += 1.0 if fid == winner else -1.0
+            # timed_out は勝敗分の加算なし(初期化のまま)
+            if self.build_shaping and FactionId.EYRIE in self.factions:
+                # 終局(勝敗確定・タイムアウトとも)でポテンシャルをゼロ化(12.7)。
+                self.rewards[FactionId.EYRIE.value] += self.build_shaping * (
+                    0.0 - self._build_phi_prev)
+                self._build_phi_prev = 0.0
+            for fid in self.factions:
+                self.infos[fid.value] = {
+                    "winner": winner.value if winner is not None else None,
+                    "turns": self.state.turn_count,
+                    "vp": self.state.fs(fid).vp,
+                }
+
         for a in self.possible_agents:
             self._cumulative_rewards[a] += self.rewards[a]
-        for fid in self.factions:
-            self.infos[fid.value] = {
-                "winner": winner.value if winner is not None else None,
-                "turns": self.state.turn_count,
-                "vp": self.state.fs(fid).vp,
-            }

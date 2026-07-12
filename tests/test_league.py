@@ -181,6 +181,9 @@ def test_flush_episode_league_stats_str_winner():
             self.possible_agents = list(agents)
             self.infos = {a: {"winner": winner} for a in agents}
             self.rewards = rewards
+            # _flush_episode は 12.7 以降 _cumulative_rewards との差分で残額を回収する。
+            # このフェイクは終局1発なので、累積 = 終局 reward そのもの(shaping なし)。
+            self._cumulative_rewards = dict(rewards)
 
     class _FakeTrainer:
         _seat_of = {"marquise": 0, "eyrie": 1}
@@ -192,6 +195,7 @@ def test_flush_episode_league_stats_str_winner():
         w.env = env
         w.agents = agents
         w.traj = {a: _Trajectory() for a in agents}
+        w.last_cum = {a: 0.0 for a in agents}  # __new__ は __init__ を通らないため明示初期化(12.7)
         # 学習ネット側だけ 1 遷移追加(凍結側は常に空, 16.3)
         learner_agent = [a for a in agents if a != frozen_seat_agent][0]
         w.traj[learner_agent].add(np.zeros(1, dtype=np.float32),
