@@ -52,6 +52,10 @@ _DECISION_TYPES: Tuple[str, ...] = (
     "VagabondSetupForestDecision", "RefreshDecision", "ItemDamageDecision",
     "ItemLimitDecision", "MarquiseMarchDecision", "FieldHospitalDecision",
     "BattleEffectsDecision", "CommandWarrenDecision", "CobblerMoveDecision",
+    # 19.4(catalog v5): 支払い選択のデシジョン化。既存順は不変・末尾に追加。
+    # 各デシジョンの remaining は既存の getattr("remaining") エンコードで観測に入る。
+    "WoodPaymentDecision", "SupporterPaymentDecision",
+    "VagabondPayItemDecision", "VagabondRepairDecision",
 )
 
 #: 手元に置ける継続効果カードの base_id(DESIGN.md 18.1/18.5。multi-hot の順序)

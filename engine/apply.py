@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional, Set
 
 from . import battle as battle_mod
 from .actions import (
@@ -20,6 +19,7 @@ from .actions import (
     AllianceOpOrganize,
     AllianceOpRecruit,
     AllianceRevolt,
+    AllianceSpendSupporter,
     AllianceSpreadSympathy,
     AllianceTrain,
     AllocateHit,
@@ -46,6 +46,7 @@ from .actions import (
     EyrieSkipDecree,
     EyrieTurmoil,
     MarquiseBuild,
+    MarquiseChooseWood,
     MarquiseFieldHospital,
     MarquiseLabor,
     MarquiseMarch,
@@ -66,14 +67,17 @@ from .actions import (
     VagabondCoalition,
     VagabondChooseCharacter,
     VagabondChooseForest,
+    VagabondExhaustItem,
     VagabondExplore,
     VagabondItemChoice,
     VagabondMove,
     VagabondQuest,
     VagabondRepair,
+    VagabondRepairItem,
     VagabondSlip,
     VagabondSpecial,
     VagabondStrike,
+    WoodPaymentDecision,
 )
 from .crafting import apply_craft
 from .factions import alliance as alliance_mod
@@ -191,45 +195,56 @@ def _spend_action(state: GameState) -> GameState:
 
 
 def _apply_build(state: GameState, action: MarquiseBuild, rng) -> GameState:
-    """建設(6.5.4)。木材は連結支配広場から自動選択で支払う(簡略化)。"""
+    """建設(6.5.4)。コスト確定後、木材を1個ずつ選ぶデシジョンを積む(19.1)。
+
+    コスト0なら従来どおり即建設。候補が毎回1つなら単一選択の自動適用(3.2)が
+    働くため挙動上の追加分岐は不要。アクション消費は建設完了時(_finish_build)。
+    """
+    from .factions.marquise import reachable_wood
     ms = state.marquise()
     n = ms.built_count(action.kind)
     cost = state.board_defs["marquise"]["building_costs"][n]
-    vp = state.board_defs["marquise"]["building_vp"][action.kind][n]
+    assert reachable_wood(state, action.clearing) >= cost, "insufficient wood for build"
+    if cost == 0:
+        return _finish_build(state, action.clearing, action.kind)
+    return state.push_pending(WoodPaymentDecision(
+        actor=FactionId.MARQUISE, remaining=cost,
+        build_clearing=action.clearing, build_kind=action.kind))
 
-    # 6.5.4.II 木材の支払い: 建設広場から連結の支配下広場を BFS で回収
-    remaining = cost
-    visited: Set[int] = {action.clearing}
-    queue = [action.clearing]
-    order = []
-    while queue:
-        cur = queue.pop(0)
-        order.append(cur)
-        for nb in state.map.clearing(cur).adjacent:
-            if nb not in visited and state.controls(FactionId.MARQUISE, nb):
-                visited.add(nb)
-                queue.append(nb)
-    for cid in order:
-        while remaining > 0 and state.clearing(cid).wood_count(FactionId.MARQUISE) > 0:
-            state = state.with_clearing(
-                state.clearing(cid).remove_one_token(FactionId.MARQUISE, T_WOOD))
-            remaining -= 1
-    assert remaining == 0, "insufficient wood for build"
-    # 除去した木材はサプライへ(3.5)
+
+def _apply_choose_wood(state: GameState, action: MarquiseChooseWood, rng) -> GameState:
+    """木材支払い1個(6.5.4.II, 19.1)。選んだ広場の木材1個をサプライへ(3.5)。
+
+    remaining>0 なら再push、remaining==0 になったら建設を完了する。
+    """
+    dec = state.pending[-1]
+    assert isinstance(dec, WoodPaymentDecision)
+    state = state.pop_pending()
+    state = state.with_clearing(
+        state.clearing(action.clearing).remove_one_token(FactionId.MARQUISE, T_WOOD))
     ms = state.marquise()
-    ms = dataclasses.replace(ms, wood_supply=ms.wood_supply + cost)
+    state = state.with_faction_state(
+        dataclasses.replace(ms, wood_supply=ms.wood_supply + 1))
+    remaining = dec.remaining - 1
+    if remaining > 0:
+        return state.push_pending(dataclasses.replace(dec, remaining=remaining))
+    return _finish_build(state, dec.build_clearing, dec.build_kind)
 
-    # 6.5.4.III タイル配置と得点
-    state = state.with_faction_state(ms)
-    cs = state.clearing(action.clearing).add_building(Piece(FactionId.MARQUISE, action.kind))
+
+def _finish_build(state: GameState, clearing: int, kind: str) -> GameState:
+    """建設の完了処理(6.5.4.III): タイル配置+VP+アクション消費(19.1)。"""
+    ms = state.marquise()
+    n = ms.built_count(kind)  # 配置前のタイル数=今回のスロット位置
+    cs = state.clearing(clearing).add_building(Piece(FactionId.MARQUISE, kind))
     state = state.with_clearing(cs)
-    ms = state.marquise()
     field = {"sawmill": "built_sawmill", "workshop": "built_workshop",
-             "recruiter": "built_recruiter"}[action.kind]
+             "recruiter": "built_recruiter"}[kind]
+    ms = state.marquise()
     ms = dataclasses.replace(ms, **{field: getattr(ms, field) + 1})
     state = state.with_faction_state(ms)
     # 建設VP(6.5.4.III)は中央ヘルパ経由(VP凍結・非負クランプ, 14.2)
     from .mechanics import award_vp
+    vp = state.board_defs["marquise"]["building_vp"][kind][n]
     state = award_vp(state, FactionId.MARQUISE, vp)
     return _spend_action(state)
 
@@ -461,6 +476,7 @@ _HANDLERS = {
     VagabondCoalition: _apply_vagabond_coalition,
     SetupChooseKeep: _apply_choose_keep,
     MarquiseBuild: _apply_build,
+    MarquiseChooseWood: _apply_choose_wood,
     MarquiseRecruit: _apply_recruit,
     MarquiseMarch: _apply_march,
     MarquiseSkipMove: _apply_skip_move,
@@ -495,6 +511,7 @@ _HANDLERS = {
     AllianceOpRecruit: alliance_mod.apply_op_recruit,
     AllianceOpOrganize: alliance_mod.apply_op_organize,
     AllianceEndOps: alliance_mod.apply_end_ops,
+    AllianceSpendSupporter: alliance_mod.apply_spend_supporter,
     OutragePay: alliance_mod.apply_outrage_pay,
     AllianceDiscardSupporter: alliance_mod.apply_discard_supporter,
     # 放浪部族(第9章)。本体は factions/vagabond.py
@@ -510,4 +527,6 @@ _HANDLERS = {
     VagabondRepair: vagabond_mod.apply_repair,
     VagabondSpecial: vagabond_mod.apply_special,
     VagabondItemChoice: _apply_vagabond_item_choice,
+    VagabondExhaustItem: vagabond_mod.apply_exhaust_item,
+    VagabondRepairItem: vagabond_mod.apply_repair_item,
 }

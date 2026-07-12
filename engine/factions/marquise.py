@@ -17,6 +17,7 @@ from ..actions import (
     EndPhase,
     FieldHospitalDecision,
     MarquiseBuild,
+    MarquiseChooseWood,
     MarquiseFieldHospital,
     MarquiseLabor,
     MarquiseMarch,
@@ -55,13 +56,14 @@ def building_clearings(state: GameState, kind: str) -> List[int]:
     return out
 
 
-def reachable_wood(state: GameState, clearing: int) -> int:
-    """建設広場から使える木材トークン総数(6.5.4.II)。
+def connected_controlled(state: GameState, clearing: int) -> Set[int]:
+    """建設広場から連結の支配下広場の集合(6.5.4.II)。
 
     建設広場自身 + 「道および自分の支配下広場」で接続した支配下広場群。
+    建設広場を支配していなければ空集合。
     """
     if not state.controls(MARQUISE, clearing):
-        return 0
+        return set()
     visited: Set[int] = {clearing}
     frontier = [clearing]
     while frontier:
@@ -72,7 +74,26 @@ def reachable_wood(state: GameState, clearing: int) -> int:
             if state.controls(MARQUISE, nb):
                 visited.add(nb)
                 frontier.append(nb)
-    return sum(state.clearing(c).wood_count(MARQUISE) for c in visited)
+    return visited
+
+
+def reachable_wood(state: GameState, clearing: int) -> int:
+    """建設広場から使える木材トークン総数(6.5.4.II)。"""
+    return sum(state.clearing(c).wood_count(MARQUISE)
+               for c in connected_controlled(state, clearing))
+
+
+def wood_payment_options(state: GameState, dec) -> List[Action]:
+    """木材支払いの候補広場(6.5.4.II, 19.1)。
+
+    建設広場から連結の支配下広場(既存 BFS と同じ集合)のうち木材が1個以上
+    ある広場。支配は兵士+建物で決まり木材(トークン)除去では変わらないため、
+    支払い途中で eligibility(連結・支配)は変化しない。cid 昇順で決定的。
+    """
+    cids = connected_controlled(state, dec.build_clearing)
+    return [MarquiseChooseWood(player=MARQUISE, clearing=c)
+            for c in sorted(cids)
+            if state.clearing(c).wood_count(MARQUISE) > 0]
 
 
 def visible_card_icons(state: GameState) -> int:

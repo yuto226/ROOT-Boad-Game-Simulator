@@ -72,7 +72,14 @@ def test_build_legal_iff_enough_connected_wood():
 
 # ---------------- 2. 建設の適用: 木材消費+印刷VP(6.5.4.III) ----------------
 def test_build_consumes_wood_and_awards_printed_vp():
-    """建設: 建設後に木材トークンが消費され、boards.jsonの印刷値どおりVPが入る。"""
+    """建設: 建設後に木材トークンが消費され、boards.jsonの印刷値どおりVPが入る。
+
+    木材支払いは WoodPaymentDecision で1個ずつ選択化された(19.1)。木材の
+    ある広場が1つだけなら候補は毎回1つ=単一選択の自動適用(3.2)相当なので、
+    legal_actions[0] で解決する。
+    """
+    from engine.legal import legal_actions
+
     state, rng = make_state((M, E))
     state = _ready_daylight(state)
     n = state.marquise().built_sawmill
@@ -89,6 +96,10 @@ def test_build_consumes_wood_and_awards_printed_vp():
     vp_before = state.marquise().vp
 
     state = apply(state, MarquiseBuild(player=M, clearing=cid, kind="sawmill"), rng)
+    while state.pending:  # 木材支払い(19.1)。候補は cid のみ=毎回1択
+        acts = legal_actions(state)
+        assert len(acts) == 1, "単一の木材広場なら支払い候補は毎回1つ: %r" % acts
+        state = apply(state, acts[0], rng)
 
     assert state.clearing(cid).wood_count(M) == 0, "連結木材が支払いで消費される"
     assert state.marquise().wood_supply == wood_supply_before + cost, (

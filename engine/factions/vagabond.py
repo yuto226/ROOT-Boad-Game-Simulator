@@ -11,8 +11,12 @@
 から on_vagabond_removes フックで行う。
 
 既知の簡略化(DESIGN.md 8.1 / レビュー確認点):
-- 配置枠(T/X/B)への配置は「置けるとき常に置く」自動処理(9.2.5.I)。
-- アイテムコストの支払いはどのタイルを exhaust するか自動選択(配置枠優先)。
+- 配置枠(T/X/B)への配置は「置けるとき常に置く」自動処理(9.2.5.I / 19.3)。
+  配置枠に置くことは回復・ドロー・上限の全ボーナスで弱支配(置かない利点が
+  ない)ため選択化しない(9.2.5.I は「配置できる」=任意だが実質必然)。
+- 固定種アイテムコスト(M/S/F/C/H)の支払いはどのタイルを exhaust するか
+  自動選択(配置枠優先)。援助の「任意のアイテム1枚」(9.5.4)は種類のみ
+  選択化し、同 kind 内はかばんエリア優先で自動(19.3)。
 - 共闘軍(9.2.8)・同盟同時移動/攻撃/肩代わり(9.2.9.II.b〜d)は対象外。
 """
 from __future__ import annotations
@@ -36,11 +40,15 @@ from ..actions import (
     VagabondBattle,
     VagabondChooseCharacter,
     VagabondChooseForest,
+    VagabondExhaustItem,
     VagabondExplore,
     VagabondItemChoice,
     VagabondMove,
+    VagabondPayItemDecision,
     VagabondQuest,
     VagabondRepair,
+    VagabondRepairDecision,
+    VagabondRepairItem,
     VagabondSlip,
     VagabondSpecial,
     VagabondStrike,
@@ -154,14 +162,35 @@ def _can_pay_any(items: Tuple[ItemTile, ...]) -> bool:
     return any(not t.exhausted and not t.damaged for t in items)
 
 
-def _pay_any(items: Tuple[ItemTile, ...]) -> Tuple[ItemTile, ...]:
-    """任意アイテム1枚を exhaust する(9.5.4。どれを払うかは自動=簡略化)。"""
+def _payable_kinds(items: Tuple[ItemTile, ...]) -> List[str]:
+    """未使用・非損傷のアイテム種一覧(重複なし・タプル順=決定的, 9.5.4/19.3)。"""
+    seen = set()
+    out: List[str] = []
+    for t in items:
+        if not t.exhausted and not t.damaged and t.kind not in seen:
+            seen.add(t.kind)
+            out.append(t.kind)
+    return out
+
+
+def _exhaust_kind(items: Tuple[ItemTile, ...], kind: str) -> Tuple[ItemTile, ...]:
+    """当該種の未使用・非損傷1枚を exhaust する(9.5.4, 19.3)。
+
+    同 kind 内はかばんエリア優先で自動: 配置枠の T/X/B は使うとかばんへ移動し
+    回復ボーナス(9.4.1等)を失うため、かばん優先が弱支配(明記, 19.3)。
+    """
+    idx = None
     for i, t in enumerate(items):
-        if not t.exhausted and not t.damaged:
-            out = list(items)
-            out[i] = replace(t, exhausted=True, on_track=False)
-            return _auto_place(tuple(out))
-    raise AssertionError("no payable item")
+        if t.kind == kind and not t.exhausted and not t.damaged:
+            if not t.on_track:
+                idx = i
+                break
+            if idx is None:
+                idx = i
+    assert idx is not None, "no payable %s" % kind
+    out = list(items)
+    out[idx] = replace(out[idx], exhausted=True, on_track=False)
+    return _auto_place(tuple(out))
 
 
 def _can_pay_items(items: Tuple[ItemTile, ...], kinds: List[str]) -> bool:
@@ -209,13 +238,23 @@ def _refresh_one(items: Tuple[ItemTile, ...], key: Tuple) -> Tuple[ItemTile, ...
 
 
 def _repair_one(items: Tuple[ItemTile, ...], kind: str) -> Tuple[ItemTile, ...]:
-    """当該種の損傷タイル1枚をかばんへ(裏表維持, 9.5.7)。表T/X/Bは配置枠へ。"""
+    """当該種の損傷タイル1枚をかばんへ(裏表維持, 9.5.7)。表T/X/Bは配置枠へ。
+
+    同 kind 内は表向き優先で自動: 修理は裏表を変えないため、表向きを直す方が
+    弱支配(明記, 19.3)。
+    """
+    idx = None
     for i, t in enumerate(items):
         if t.kind == kind and t.damaged:
-            out = list(items)
-            out[i] = replace(t, damaged=False, on_track=False)
-            return _auto_place(tuple(out))
-    raise AssertionError("no damaged %s to repair" % kind)
+            if not t.exhausted:
+                idx = i
+                break
+            if idx is None:
+                idx = i
+    assert idx is not None, "no damaged %s to repair" % kind
+    out = list(items)
+    out[idx] = replace(out[idx], damaged=False, on_track=False)
+    return _auto_place(tuple(out))
 
 
 def _remove_one(items: Tuple[ItemTile, ...], key: Tuple) -> Tuple[ItemTile, ...]:
@@ -375,6 +414,24 @@ def limit_options(state: GameState, dec: ItemLimitDecision) -> List[Action]:
         seen.add(k)
         out.append(VagabondItemChoice(player=VAGABOND, key=k))
     return out
+
+
+def pay_item_options(state: GameState, dec: VagabondPayItemDecision) -> List[Action]:
+    """援助の任意アイテム支払い(9.5.4, 19.3): 未使用・非損傷の種類ごと。"""
+    return [VagabondExhaustItem(player=VAGABOND, kind=k)
+            for k in _payable_kinds(state.vagabond().items)]
+
+
+def hideout_repair_options(state: GameState,
+                           dec: VagabondRepairDecision) -> List[Action]:
+    """隠れ家の修理1枚(D.3.2, 19.3): 損傷アイテムの種類ごと。"""
+    kinds: List[str] = []
+    seen = set()
+    for t in state.vagabond().items:
+        if t.damaged and t.kind not in seen:
+            seen.add(t.kind)
+            kinds.append(t.kind)
+    return [VagabondRepairItem(player=VAGABOND, kind=k) for k in kinds]
 
 
 # ============================================================
@@ -790,24 +847,59 @@ def apply_explore(state: GameState, action: VagabondExplore, rng) -> GameState:
 
 
 def apply_aid(state: GameState, action: VagabondAid, rng) -> GameState:
-    """援助(9.5.4)。任意アイテム1を払い、手札1枚を相手へ・相手作成アイテムを取得可。"""
+    """援助(9.5.4)。任意アイテム1を払い、手札1枚を相手へ・相手作成アイテムを取得可。
+
+    支払えるアイテム種が複数あれば ``VagabondPayItemDecision`` で選択化(19.3)。
+    1種のみなら自動支払い(単一選択の自動適用 3.2 と同値)。支払いは取得より
+    先(9.5.4)なので、支払い候補は取得アイテム加入前の items から確定する。
+    """
     vs = state.vagabond()
-    items = _pay_any(vs.items)
+    kinds = _payable_kinds(vs.items)
+    assert kinds, "aid without payable item"
+    if len(kinds) > 1:
+        return state.push_pending(VagabondPayItemDecision(
+            actor=VAGABOND, remaining=1, aid_faction=action.faction,
+            aid_card_id=action.card_id, aid_take_item=action.take_item))
+    state = state.with_faction_state(
+        replace(vs, items=_exhaust_kind(vs.items, kinds[0])))
+    return _finish_aid(state, action.faction, action.card_id, action.take_item)
+
+
+def apply_exhaust_item(state: GameState, action: VagabondExhaustItem,
+                       rng) -> GameState:
+    """援助の任意アイテム支払い(9.5.4, 19.3)。``VagabondPayItemDecision`` の応答。
+
+    選んだ種の1枚を exhaust(同 kind 内はかばんエリア優先で自動)し、
+    デシジョンに保持した援助本体(カード譲渡・アイテム取得・関係処理)を続行する。
+    """
+    dec = state.pending[-1]
+    assert isinstance(dec, VagabondPayItemDecision)
+    state = state.pop_pending()
+    vs = state.vagabond()
+    state = state.with_faction_state(
+        replace(vs, items=_exhaust_kind(vs.items, action.kind)))
+    return _finish_aid(state, dec.aid_faction, dec.aid_card_id, dec.aid_take_item)
+
+
+def _finish_aid(state: GameState, faction: FactionId, card_id: str,
+                take_item: Optional[str]) -> GameState:
+    """援助本体(9.5.4): カード譲渡 → アイテム取得(任意)→ 関係処理(支払い後)。"""
+    vs = state.vagabond()
     hand = list(vs.hand)
-    hand.remove(action.card_id)
-    state = state.with_faction_state(replace(vs, items=items, hand=tuple(hand)))
+    hand.remove(card_id)
+    state = state.with_faction_state(replace(vs, hand=tuple(hand)))
     # 相手へカードを渡す
-    tfs = state.fs(action.faction)
-    state = state.with_faction_state(replace(tfs, hand=tfs.hand + (action.card_id,)))
+    tfs = state.fs(faction)
+    state = state.with_faction_state(replace(tfs, hand=tfs.hand + (card_id,)))
     # 相手の作成アイテムを取得(任意)
-    if action.take_item is not None:
-        tfs = state.fs(action.faction)
+    if take_item is not None:
+        tfs = state.fs(faction)
         titems = list(tfs.items)
-        titems.remove(ItemKind(action.take_item))
+        titems.remove(ItemKind(take_item))
         state = state.with_faction_state(replace(tfs, items=tuple(titems)))
         vs = state.vagabond()
-        state = state.with_faction_state(replace(vs, items=_add_item(vs.items, action.take_item)))
-    return _adjust_relationship_on_aid(state, action.faction)
+        state = state.with_faction_state(replace(vs, items=_add_item(vs.items, take_item)))
+    return _adjust_relationship_on_aid(state, faction)
 
 
 def _adjust_relationship_on_aid(state: GameState, faction: FactionId) -> GameState:
@@ -959,21 +1051,46 @@ def _do_day_labor(state: GameState, card_id: str) -> GameState:
 
 
 def _do_hideout(state: GameState, rng) -> GameState:
-    """隠れ家(D.3.2): 3枚まで修理し、ただちに昼光を終え夕闇へ(鷲巣の休止と同型)。"""
+    """隠れ家(D.3.2): 3枚まで修理し、ただちに昼光を終え夕闇へ(鷲巣の休止と同型)。
+
+    損傷アイテムが3枚以下なら全修理で選択の余地なし=自動(19.3)。4枚以上
+    なら ``VagabondRepairDecision``(remaining=3)で1枚ずつ選択し、終了後に
+    夕闇へ直行する(_finish_hideout)。
+    """
     vs = state.vagabond()
-    out = []
-    count = 0
-    for t in vs.items:
-        if t.damaged and count < 3:
-            out.append(replace(t, damaged=False, on_track=False))  # 裏表は維持
-            count += 1
-        else:
-            out.append(t)
-    items = _auto_place(tuple(out))
-    state = state.with_faction_state(replace(vs, items=items))
+    n_damaged = sum(1 for t in vs.items if t.damaged)
+    if n_damaged > 3:
+        return state.push_pending(VagabondRepairDecision(actor=VAGABOND, remaining=3))
+    # 3枚以下: 全修理(自動)。裏表は維持(修理は表裏を変えない)
+    items = tuple(replace(t, damaged=False, on_track=False) if t.damaged else t
+                  for t in vs.items)
+    state = state.with_faction_state(replace(vs, items=_auto_place(items)))
+    return _finish_hideout(state, rng)
+
+
+def _finish_hideout(state: GameState, rng) -> GameState:
+    """隠れ家の後続処理(D.3.2): ただちに昼光を終え夕闇へ(9.6 の強制処理込み)。"""
     state = state.replace(phase=Phase.EVENING)
     from . import get_logic
     return get_logic(VAGABOND).begin_phase(state, rng)
+
+
+def apply_repair_item(state: GameState, action: VagabondRepairItem,
+                      rng) -> GameState:
+    """隠れ家の修理1枚(D.3.2, 19.3)。``VagabondRepairDecision`` の応答。
+
+    同 kind 内は表向き優先で自動(_repair_one)。1枚ごとに再push し、損傷が
+    尽きるか remaining==0 で終了して夕闇へ直行する。
+    """
+    dec = state.pending[-1]
+    assert isinstance(dec, VagabondRepairDecision)
+    state = state.pop_pending()
+    vs = state.vagabond()
+    state = state.with_faction_state(replace(vs, items=_repair_one(vs.items, action.kind)))
+    remaining = dec.remaining - 1
+    if remaining > 0 and any(t.damaged for t in state.vagabond().items):
+        return state.push_pending(replace(dec, remaining=remaining))
+    return _finish_hideout(state, rng)
 
 
 # ---- アイテム選択デシジョンへの応答 ----

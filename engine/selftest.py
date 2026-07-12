@@ -18,6 +18,8 @@ from .actions import (
     ActivateDominance,
     AllianceDiscardSupporter,
     AllianceRevolt,
+    AllianceSpendSupporter,
+    AllianceSpreadSympathy,
     AllocateHit,
     AllocateHitsDecision,
     AmbushChoice,
@@ -36,6 +38,8 @@ from .actions import (
     FieldHospitalDecision,
     ItemDamageDecision,
     ItemLimitDecision,
+    MarquiseBuild,
+    MarquiseChooseWood,
     MarquiseFieldHospital,
     MarquiseMarch,
     MarquiseMarchDecision,
@@ -44,6 +48,7 @@ from .actions import (
     OutragePay,
     SetupChooseKeep,
     SkipBattleEffects,
+    SupporterPaymentDecision,
     SupportersLimitDecision,
     TakeDominance,
     UseCraftedEffect,
@@ -52,9 +57,15 @@ from .actions import (
     VagabondChooseCharacter,
     VagabondChooseForest,
     VagabondCoalition,
+    VagabondExhaustItem,
     VagabondExplore,
+    VagabondPayItemDecision,
     VagabondQuest,
+    VagabondRepairDecision,
+    VagabondRepairItem,
+    VagabondSpecial,
     VagabondStrike,
+    WoodPaymentDecision,
 )
 from .apply import apply
 from .battle import remove_piece
@@ -579,9 +590,20 @@ def test_vagabond_aid_relationship() -> None:
     assert not any(a.take_item is None for a in aids), \
         "no-take must be illegal while target has items (9.5.4)"
 
+    def _aid(state, card, take=None):
+        """援助1回。tea 獲得後は支払い種が複数になり VagabondPayItemDecision が
+        積まれる(19.3)ので、boots の支払いを選んで解決する。"""
+        state = apply(state, VagabondAid(player=V, faction=M, card_id=card,
+                                         take_item=take), rng)
+        if state.pending and isinstance(state.pending[-1], VagabondPayItemDecision):
+            state = apply(state, VagabondExhaustItem(player=V, kind="boots"), rng)
+        return state
+
     # 1回目(コスト1): 無関心→マス1で+1VP。アイテム取得も行う
+    # (支払い候補は boots のみ=1種 → 選択化されず自動, 19.3)
     state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[0],
                                      take_item="tea"), rng)
+    assert not state.pending, "single payable kind: no decision (19.3)"
     vs = state.vagabond()
     assert _rel(state, M) == 1 and vs.vp == vp0 + 1, "advance to 1: +1VP"
     assert ItemKind.TEA not in state.fs(M).items, "tea moved out of marquise box"
@@ -589,20 +611,20 @@ def test_vagabond_aid_relationship() -> None:
     assert cards[0] in state.fs(M).hand, "aid card given to marquise"
 
     # 2回で次のマスへ(コスト2): 1回目はVPなし、2回目で+2VP
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[1]), rng)
+    state = _aid(state, cards[1])
     assert _rel(state, M) == 1 and state.vagabond().vp == vp0 + 1, "1/2: no VP yet"
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[2]), rng)
+    state = _aid(state, cards[2])
     assert _rel(state, M) == 2 and state.vagabond().vp == vp0 + 3, "advance to 2: +2VP"
 
     # 3回で同盟へ(コスト3): +2VP
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[3]), rng)
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[4]), rng)
+    state = _aid(state, cards[3])
+    state = _aid(state, cards[4])
     assert state.vagabond().vp == vp0 + 3, "2/3: no VP yet"
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[5]), rng)
+    state = _aid(state, cards[5])
     assert _rel(state, M) == 3 and state.vagabond().vp == vp0 + 5, "allied: +2VP"
 
     # 同盟後の援助: 毎回+2VP(9.2.9.II.a)
-    state = apply(state, VagabondAid(player=V, faction=M, card_id=cards[6]), rng)
+    state = _aid(state, cards[6])
     assert _rel(state, M) == 3 and state.vagabond().vp == vp0 + 7, "allied aid: +2VP"
     print("  aid: relationship 0->3 (allied), vp +%d, item taken"
           % (state.vagabond().vp - vp0))
@@ -1413,6 +1435,256 @@ def test_better_burrow_bank() -> None:
     print("  better burrow bank: both drew 1 (self first), once per turn")
 
 
+# ============================================================
+#  支払い選択のデシジョン化(19章, catalog v5)
+# ============================================================
+def test_wood_payment_choice() -> None:
+    """(19.5-1a) 木材支払い: 複数広場から選択でき、選んだ広場から減る。
+    コスト0は即建設、残り1択は単一選択(3.2)相当で自動適用できる。"""
+    rng = random.Random(301)
+    state = _setup_two_faction(rng)
+    state = state.replace(phase=Phase.DAYLIGHT)
+    state = _set_fs(state, M, actions_left=3, built_sawmill=2)
+
+    # 建設広場 bc(空き枠あり)と、連結支配下の2広場 n1/n2 に木材1個ずつ
+    bc = 2
+    state = _clear(state, bc)
+    state = state.with_clearing(state.clearing(bc).add_soldiers(M, 1))
+    n1, n2 = state.map.clearing(bc).adjacent[:2]
+    for n in (n1, n2):
+        state = _clear(state, n)
+        state = state.with_clearing(
+            state.clearing(n).add_soldiers(M, 1).add_token(Piece(M, T_WOOD)))
+    ms = state.fs(M)
+    state = _set_fs(state, M, wood_supply=ms.wood_supply - 2)
+    cost = state.board_defs["marquise"]["building_costs"][2]
+    assert cost == 2, "3棟目の製材所コスト=2(boards.json)"
+    vp = state.board_defs["marquise"]["building_vp"]["sawmill"][2]
+    vp0 = state.fs(M).vp
+    supply0 = state.fs(M).wood_supply
+
+    state = apply(state, MarquiseBuild(player=M, clearing=bc, kind="sawmill"), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, WoodPaymentDecision) and dec.remaining == 2, repr(dec)
+    assert state.fs(M).actions_left == 3, "アクション消費は建設完了時(19.1)"
+    acts = legal_actions(state)
+    assert sorted(a.clearing for a in acts) == sorted([n1, n2]), \
+        "木材のある連結支配広場2つが候補: %r" % acts
+
+    # n1 を選ぶ → n1 から減り、n2 は残る。再push で残り1択
+    state = apply(state, MarquiseChooseWood(player=M, clearing=n1), rng)
+    assert state.clearing(n1).wood_count(M) == 0, "選んだ広場から木材が減る"
+    assert state.clearing(n2).wood_count(M) == 1, "選ばなかった広場は不変"
+    dec = state.pending[-1]
+    assert isinstance(dec, WoodPaymentDecision) and dec.remaining == 1, "1個ごとに再push"
+    acts = legal_actions(state)
+    assert len(acts) == 1 and acts[0].clearing == n2, "残り1択(自動適用対象, 3.2)"
+    state = apply(state, acts[0], rng)
+
+    # 建設完了: タイル配置+VP+アクション消費+木材はサプライへ(3.5)
+    assert not state.pending
+    assert any(p.kind == B_SAWMILL for p in state.clearing(bc).buildings_of(M))
+    assert state.fs(M).built_sawmill == 3
+    assert state.fs(M).vp == vp0 + vp, "印刷VP(6.5.4.III)"
+    assert state.fs(M).actions_left == 2, "完了時にアクション1消費"
+    assert state.fs(M).wood_supply == supply0 + 2, "支払った木材はサプライへ(3.5)"
+
+    # コスト0(1棟目): デシジョンなしで即建設
+    state2 = _setup_two_faction(random.Random(302))
+    state2 = state2.replace(phase=Phase.DAYLIGHT)
+    state2 = _set_fs(state2, M, actions_left=3, built_sawmill=0)
+    bc2 = 2
+    state2 = _clear(state2, bc2)
+    state2 = state2.with_clearing(state2.clearing(bc2).add_soldiers(M, 1))
+    state2 = apply(state2, MarquiseBuild(player=M, clearing=bc2, kind="sawmill"), rng)
+    assert not state2.pending, "コスト0は従来どおり即建設(19.1)"
+    assert any(p.kind == B_SAWMILL for p in state2.clearing(bc2).buildings_of(M))
+    print("  wood payment: 2 candidates -> chosen clearing pays, cost0 immediate")
+
+
+def test_supporter_payment_choice() -> None:
+    """(19.5-1b) 支援者支払い: 一致+鳥混在で選択が出る・片方のみなら出ない・
+    反乱2枚・戒厳令+1の枚数。"""
+    rng = random.Random(303)
+    base = _setup_marquise_alliance(rng)
+    base = base.replace(turn_index=base.factions.index(A))  # 鳥歌(8.4)
+    target = next(cs.cid for cs in base.clearings
+                  if not cs.has_token(A, T_SYMPATHY)
+                  and not base.placement_blocked(A, cs.cid))
+    suit = base.map.clearing(target).suit
+    cost0 = base.board_defs["alliance"]["sympathy_costs"][0]
+    assert cost0 == 1, "1枚目の支持拡大コスト=1(boards.json)"
+    match_card = _cards_of_suit(base, suit, 1)[0]
+    bird_card = next(d.id for d in base.cards.defs
+                     if d.suit == Suit.BIRD and not d.is_dominance)
+
+    # 一致+鳥の混在 → SupporterPaymentDecision で2択
+    state = _set_alliance(base, placed_sympathy=0,
+                          supporters=(match_card, bird_card))
+    state = apply(state, AllianceSpreadSympathy(player=A, clearing=target), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, SupporterPaymentDecision) and dec.remaining == 1, repr(dec)
+    acts = legal_actions(state)
+    assert acts == [AllianceSpendSupporter(player=A, suit=suit),
+                    AllianceSpendSupporter(player=A, suit=Suit.BIRD)], repr(acts)
+    # 鳥で払う → 一致カードが残り、トークン配置
+    state = apply(state, AllianceSpendSupporter(player=A, suit=Suit.BIRD), rng)
+    assert not state.pending
+    assert state.alliance().supporters == (match_card,), "鳥カードだけ消費"
+    assert state.clearing(target).has_token(A, T_SYMPATHY)
+    assert bird_card in state.discard, "支払いは捨て山へ"
+
+    # 一致のみ → 従来どおり自動(デシジョンなし)
+    state = _set_alliance(base, placed_sympathy=0, supporters=(match_card,))
+    state = apply(state, AllianceSpreadSympathy(player=A, clearing=target), rng)
+    assert not state.pending, "一致suitのみなら自動支払い(19.2)"
+    assert state.alliance().supporters == ()
+
+    # 鳥のみ → 従来どおり自動
+    state = _set_alliance(base, placed_sympathy=0, supporters=(bird_card,))
+    state = apply(state, AllianceSpreadSympathy(player=A, clearing=target), rng)
+    assert not state.pending, "鳥のみなら自動支払い(19.2)"
+
+    # 戒厳令(8.4.2.II.a): 敵兵士3個で remaining=cost+1
+    state = base.with_clearing(base.clearing(target).with_soldiers(M, 3))
+    supp = tuple(_cards_of_suit(state, suit, cost0 + 1)) + (bird_card,)
+    state = _set_alliance(state, placed_sympathy=0, supporters=supp)
+    state = apply(state, AllianceSpreadSympathy(player=A, clearing=target), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, SupporterPaymentDecision) and dec.remaining == cost0 + 1, \
+        "戒厳令でコスト+1: %r" % (dec,)
+    # 1枚払うごとに再push(remaining が減る)
+    state = apply(state, AllianceSpendSupporter(player=A, suit=suit), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, SupporterPaymentDecision) and dec.remaining == cost0, \
+        "1枚ごとに再push: %r" % (dec,)
+    state = apply(state, AllianceSpendSupporter(player=A, suit=suit), rng)
+    assert not state.pending and state.alliance().supporters == (bird_card,)
+
+    # 反乱(8.4.1)=2枚: 一致1+鳥2 → 選択で一致を払うと残りは鳥のみ=自動
+    fox_cids = _clearings_of_suit(base, Suit.FOX)
+    c = next(cid for cid in fox_cids if not base.clearing(cid).ruin
+             and not base.placement_blocked(A, cid))
+    state = _clear(base, c)
+    state = state.with_clearing(state.clearing(c).add_token(Piece(A, T_SYMPATHY)))
+    fox_card = _cards_of_suit(state, Suit.FOX, 1)[0]
+    bird2 = [d.id for d in state.cards.defs
+             if d.suit == Suit.BIRD and not d.is_dominance][1]
+    state = _set_alliance(state, placed_sympathy=1,
+                          supporters=(fox_card, bird_card, bird2))
+    state = apply(state, AllianceRevolt(player=A, clearing=c), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, SupporterPaymentDecision) and dec.remaining == 2, \
+        "反乱=2枚(8.4.1): %r" % (dec,)
+    state = apply(state, AllianceSpendSupporter(player=A, suit=Suit.FOX), rng)
+    # 残り1枚は鳥のみ → 自動支払いで反乱が解決する
+    assert not state.pending
+    assert state.alliance().supporters == (bird2,), "fox 1枚+鳥1枚を消費"
+    assert any(p.kind == B_BASE for p in state.clearing(c).buildings_of(A)), \
+        "支払い完了後に反乱が解決(拠点設立)"
+    print("  supporter payment: mixed->choice, single-type->auto, "
+          "revolt=2, martial law +1")
+
+
+def test_vagabond_pay_item_choice() -> None:
+    """(19.5-1c) 援助の任意アイテム: 種類の選択が出る・かばん優先で exhaust・
+    取得アイテムは支払い候補に入らない。"""
+    rng = random.Random(304)
+    state = _setup_marquise_vagabond(rng)
+    c = 3  # mouse
+    state = _clear(state, c)
+    state = state.with_clearing(state.clearing(c).add_soldiers(M, 1))
+    card = _cards_of_suit(state, Suit.MOUSE, 1)[0]
+    # tea×2(配置枠1+かばん1)+ boots1 = 支払い候補は tea/boots の2種
+    items = (_tile("tea", on_track=True), _tile("tea"), _tile("boots"))
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c,
+                          hand=(card,), items=items)
+    state = state.with_faction_state(dataclasses.replace(
+        state.fs(M), items=(ItemKind.TEA,), hand=()))
+
+    state = apply(state, VagabondAid(player=V, faction=M, card_id=card,
+                                     take_item="tea"), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, VagabondPayItemDecision) and dec.remaining == 1, repr(dec)
+    acts = legal_actions(state)
+    assert acts == [VagabondExhaustItem(player=V, kind="tea"),
+                    VagabondExhaustItem(player=V, kind="boots")], \
+        "取得予定の tea は候補を増やさない(支払いが先, 9.5.4): %r" % acts
+
+    state = apply(state, VagabondExhaustItem(player=V, kind="tea"), rng)
+    assert not state.pending
+    vs = state.vagabond()
+    # かばん優先(19.3): 配置枠の tea は表のまま残り、かばんの tea が exhaust
+    assert any(t.kind == "tea" and t.on_track and not t.exhausted for t in vs.items), \
+        "配置枠の tea は残る(かばん優先): %r" % (vs.items,)
+    assert sum(1 for t in vs.items if t.kind == "tea" and t.exhausted) == 1
+    # 援助本体も完了: カード譲渡・tea 取得・関係+1
+    assert card in state.fs(M).hand and ItemKind.TEA not in state.fs(M).items
+    assert sum(1 for t in vs.items if t.kind == "tea") == 3, "取得した tea が加わる"
+    assert _rel(state, M) == 1, "援助後の関係処理も接続(9.2.9.I)"
+    print("  vagabond pay item: kind choice, bag-area tea exhausted, aid completed")
+
+
+def test_vagabond_hideout_repair_choice() -> None:
+    """(19.5-1d) 隠れ家: 損傷4枚で3枚選択修理(表向き優先)・3枚以下は自動。"""
+    rng = random.Random(305)
+    state = _setup_marquise_vagabond(rng, character="ranger")
+    c = 3
+    state = _clear(state, c)
+    # 損傷4枚(sword 表/裏+boots+hammer)+支払い用 torch
+    items = (_tile("torch"),
+             _tile("sword", damaged=True),
+             _tile("sword", damaged=True, exhausted=True),
+             _tile("boots", damaged=True),
+             _tile("hammer", damaged=True))
+    state = _set_vagabond(state, pawn_forest=None, pawn_clearing=c,
+                          hand=(), items=items)
+
+    state = apply(state, VagabondSpecial(player=V), rng)
+    dec = state.pending[-1]
+    assert isinstance(dec, VagabondRepairDecision) and dec.remaining == 3, \
+        "損傷4枚 → 3枚選択修理(19.3): %r" % (dec,)
+    assert state.phase == Phase.DAYLIGHT, "修理が終わるまで夕闇へ進まない"
+    acts = legal_actions(state)
+    assert sorted(a.kind for a in acts) == ["boots", "hammer", "sword"], repr(acts)
+
+    # sword を選ぶ → 表向きの sword が先に直る(表向き優先, 19.3)
+    state = apply(state, VagabondRepairItem(player=V, kind="sword"), rng)
+    vs = state.vagabond()
+    assert any(t.kind == "sword" and not t.damaged and not t.exhausted
+               for t in vs.items), "表向きの sword が修理される"
+    assert any(t.kind == "sword" and t.damaged and t.exhausted for t in vs.items), \
+        "裏向きの sword は損傷のまま"
+    dec = state.pending[-1]
+    assert isinstance(dec, VagabondRepairDecision) and dec.remaining == 2, "再push"
+
+    # 2枚目も sword → 裏向きが直る(裏表は維持, 9.5.7)
+    state = apply(state, VagabondRepairItem(player=V, kind="sword"), rng)
+    vs = state.vagabond()
+    assert any(t.kind == "sword" and not t.damaged and t.exhausted for t in vs.items), \
+        "修理は裏表を変えない"
+    state = apply(state, VagabondRepairItem(player=V, kind="boots"), rng)
+    # remaining==0 → 隠れ家の後続処理: 夕闇へ直行(D.3.2)
+    vs = state.vagabond()
+    assert state.phase == Phase.EVENING, "3枚修理後にただちに夕闇へ"
+    assert any(t.kind == "hammer" and t.damaged for t in vs.items), \
+        "4枚目(hammer)は損傷のまま"
+
+    # 損傷3枚以下: 従来どおり全修理(自動)で即夕闇へ
+    state2 = _setup_marquise_vagabond(random.Random(306), character="ranger")
+    state2 = _clear(state2, c)
+    items2 = (_tile("torch"), _tile("sword", damaged=True),
+              _tile("boots", damaged=True), _tile("hammer", damaged=True))
+    state2 = _set_vagabond(state2, pawn_forest=None, pawn_clearing=c,
+                           hand=(), items=items2)
+    state2 = apply(state2, VagabondSpecial(player=V), rng)
+    assert not any(isinstance(d, VagabondRepairDecision) for d in state2.pending), \
+        "3枚以下は自動全修理(19.3)"
+    assert not any(t.damaged for t in state2.vagabond().items)
+    assert state2.phase == Phase.EVENING
+    print("  hideout: 4 damaged -> pick 3 (face-up first), <=3 auto, then evening")
+
+
 def main() -> int:
     print("selftest: battle via pending stack")
     test_battle_via_pending()
@@ -1480,6 +1752,14 @@ def main() -> int:
     test_stand_and_deliver()
     print("selftest: better burrow bank (18.3)")
     test_better_burrow_bank()
+    print("selftest: wood payment choice (6.5.4.II, 19.1)")
+    test_wood_payment_choice()
+    print("selftest: supporter payment choice (8.4.1/8.4.2, 19.2)")
+    test_supporter_payment_choice()
+    print("selftest: vagabond pay item choice (9.5.4, 19.3)")
+    test_vagabond_pay_item_choice()
+    print("selftest: vagabond hideout repair choice (D.3.2, 19.3)")
+    test_vagabond_hideout_repair_choice()
     print("OK")
     return 0
 
