@@ -22,3 +22,6 @@ simulation/dashboard.html
 # RL学習の出力(フェーズ6c)
 rl_runs/
 ui/json
+
+# pip install -e のビルド成果物
+*.egg-info/

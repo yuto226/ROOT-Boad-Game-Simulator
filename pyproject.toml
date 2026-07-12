@@ -17,6 +17,8 @@ dependencies = []
 # RL 環境ラッパー(rl/)のみ numpy に依存する(DESIGN.md 12.1)。
 # エンジン本体の依存ゼロを守るため、numpy は optional に隔離する。
 rl = ["numpy"]
+# 観戦APIサーバ(server/)のみ fastapi/uvicorn/httpx に依存する(フェーズ7後半)。
+server = ["fastapi>=0.100", "uvicorn>=0.23", "httpx>=0.24"]
 
 [tool.setuptools]
 # フラットレイアウト。トップレベルの各パッケージを明示列挙する。
@@ -29,6 +31,7 @@ packages = [
     "simulation",
     "analysis",
     "rl",
+    "server",
 ]
 
 [tool.setuptools.package-data]
